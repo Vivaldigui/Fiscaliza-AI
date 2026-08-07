@@ -5,6 +5,39 @@ export const countingModeSchema = z.enum(['CALENDAR_DAYS', 'BUSINESS_DAYS']);
 const positiveDays = z.number().int().min(0).max(3650);
 const confidence = z.number().min(0).max(1);
 
+export const deadlinePolicySchema = z
+  .object({
+    policyVersion: z.number().int().positive(),
+    initialResponseDays: positiveDays,
+    extensionDays: positiveDays,
+    countingMode: countingModeSchema,
+    timezone: z.string().min(1).max(100),
+    dueSoonDays: positiveDays,
+    suspensionEnabled: z.boolean(),
+    startDayRule: z.enum(['EXCLUDE_START_DATE', 'INCLUDE_START_DATE']),
+    nonBusinessDueDateRule: z.enum(['NEXT_BUSINESS_DAY', 'PREVIOUS_BUSINESS_DAY', 'KEEP_DATE']),
+    holidayScopes: z.array(z.enum(['NATIONAL', 'STATE', 'MUNICIPAL', 'INSTITUTIONAL'])),
+  })
+  .strict();
+
+export type DeadlinePolicy = z.infer<typeof deadlinePolicySchema>;
+
+export const associationWeightsSchema = z
+  .object({
+    explicitReference: confidence,
+    number: confidence,
+    year: confidence,
+    type: confidence,
+    protocol: confidence,
+    subject: confidence,
+    temporal: confidence,
+  })
+  .strict()
+  .refine(
+    (value) => Math.abs(Object.values(value).reduce((sum, weight) => sum + weight, 0) - 1) < 0.001,
+    { message: 'Os pesos de associação devem somar 1.' },
+  );
+
 export const settingSchemas = {
   'deadlines.initialResponseDays': positiveDays,
   'deadlines.extensionDays': positiveDays,
@@ -26,17 +59,20 @@ export const settingSchemas = {
     ),
   'deadlines.dueSoonDays': positiveDays,
   'deadlines.allowSuspension': z.boolean(),
+  'deadlines.policy.REQUEST': deadlinePolicySchema,
+  'deadlines.policy.INDICATION': deadlinePolicySchema,
   'analysis.confidence.normal': confidence,
   'analysis.confidence.warning': confidence,
   'association.autoThreshold': confidence,
   'association.minimumMargin': confidence,
+  'association.signalWeights': associationWeightsSchema,
   'documents.maxSizeMb': z.number().int().min(1).max(500),
 } as const;
 
 export type SystemSettingKey = keyof typeof settingSchemas;
 
 export interface SettingDefinition {
-  value: string | number | boolean;
+  value: string | number | boolean | Record<string, unknown>;
   valueType: 'STRING' | 'INTEGER' | 'DECIMAL' | 'BOOLEAN' | 'JSON';
   description: string;
 }
@@ -72,6 +108,38 @@ export const initialSystemSettings: Record<SystemSettingKey, SettingDefinition> 
     valueType: 'BOOLEAN',
     description: 'Permite registrar eventos formais de suspensão de prazo.',
   },
+  'deadlines.policy.REQUEST': {
+    value: {
+      policyVersion: 1,
+      initialResponseDays: 15,
+      extensionDays: 15,
+      countingMode: 'CALENDAR_DAYS',
+      timezone: 'America/Sao_Paulo',
+      dueSoonDays: 3,
+      suspensionEnabled: true,
+      startDayRule: 'EXCLUDE_START_DATE',
+      nonBusinessDueDateRule: 'NEXT_BUSINESS_DAY',
+      holidayScopes: ['NATIONAL', 'STATE', 'MUNICIPAL', 'INSTITUTIONAL'],
+    },
+    valueType: 'JSON',
+    description: 'Política versionada de prazo aplicável a requerimentos.',
+  },
+  'deadlines.policy.INDICATION': {
+    value: {
+      policyVersion: 1,
+      initialResponseDays: 15,
+      extensionDays: 15,
+      countingMode: 'CALENDAR_DAYS',
+      timezone: 'America/Sao_Paulo',
+      dueSoonDays: 3,
+      suspensionEnabled: true,
+      startDayRule: 'EXCLUDE_START_DATE',
+      nonBusinessDueDateRule: 'NEXT_BUSINESS_DAY',
+      holidayScopes: ['NATIONAL', 'STATE', 'MUNICIPAL', 'INSTITUTIONAL'],
+    },
+    valueType: 'JSON',
+    description: 'Política versionada de prazo aplicável a indicações.',
+  },
   'analysis.confidence.normal': {
     value: 0.85,
     valueType: 'DECIMAL',
@@ -91,6 +159,19 @@ export const initialSystemSettings: Record<SystemSettingKey, SettingDefinition> 
     value: 0.15,
     valueType: 'DECIMAL',
     description: 'Diferença mínima entre o primeiro e o segundo candidato.',
+  },
+  'association.signalWeights': {
+    value: {
+      explicitReference: 0.5,
+      number: 0.15,
+      year: 0.1,
+      type: 0.1,
+      protocol: 0.05,
+      subject: 0.05,
+      temporal: 0.05,
+    },
+    valueType: 'JSON',
+    description: 'Pesos normalizados dos sinais determinísticos de associação.',
   },
   'documents.maxSizeMb': {
     value: 25,

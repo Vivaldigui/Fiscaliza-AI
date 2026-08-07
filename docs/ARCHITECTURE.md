@@ -60,22 +60,24 @@ As dependências apontam para dentro: `apps/*` pode depender de `packages/*`; `s
 
 ## 4. Componentes do backend
 
-| Módulo                             | Responsabilidade                                              |
-| ---------------------------------- | ------------------------------------------------------------- |
-| `AuthModule`                       | login, refresh token rotativo, revogação e identidade atual   |
-| `AuthorizationModule`              | RBAC e escopo por autoria/classificação                       |
-| `UsersModule` / `CouncilorsModule` | usuários, papéis, mandatos e identidades WhatsApp             |
-| `PropositionsModule`               | requerimentos, indicações, itens e visão agregada             |
-| `DocumentsModule`                  | upload, metadados, checksum, URLs assinadas e páginas         |
-| `ResponsesModule`                  | respostas 1:N, associação automática/manual e complementações |
-| `AnalysesModule`                   | análise estruturada, revisões, evidências e resumo executivo  |
-| `DeadlinesModule`                  | cálculo configurável, prorrogações, estados e alertas         |
-| `WhatsappModule`                   | idempotência, sessão Redis, contexto e respostas              |
-| `NotificationsModule`              | outbox, tentativas, entrega e falhas recuperáveis             |
-| `SettingsModule`                   | configurações tipadas, versionadas e auditadas                |
-| `AuditModule`                      | trilha append-only de ações relevantes                        |
-| `HealthModule`                     | liveness/readiness de API, PostgreSQL, Redis e MinIO          |
-| `JobsModule`                       | filas, retries, backoff, dead-letter e métricas               |
+| Módulo                             | Responsabilidade                                             |
+| ---------------------------------- | ------------------------------------------------------------ |
+| `AuthModule`                       | login, refresh token rotativo, revogação e identidade atual  |
+| `AuthorizationModule`              | RBAC e escopo por autoria/classificação                      |
+| `UsersModule` / `CouncilorsModule` | usuários, papéis, mandatos e identidades WhatsApp            |
+| `PropositionsModule`               | requerimentos/indicações, coautoria, documentos e timeline   |
+| `DocumentsModule`                  | upload, metadados, checksum, URLs assinadas e páginas        |
+| `ResponsesModule`                  | respostas 1:N, complementações, retificações e documentos    |
+| `AssociationsModule`               | candidatos determinísticos, decisão e revisão manual         |
+| `AnalysesModule`                   | análise estruturada, revisões, evidências e resumo executivo |
+| `DeadlinesModule`                  | política/snapshot, prorrogações, suspensões e estados        |
+| `HolidaysModule`                   | calendário administrativo por escopo                         |
+| `WhatsappModule`                   | idempotência, sessão Redis, contexto e respostas             |
+| `NotificationsModule`              | outbox, tentativas, entrega e falhas recuperáveis            |
+| `SettingsModule`                   | configurações tipadas, versionadas e auditadas               |
+| `AuditModule`                      | trilha append-only de ações relevantes                       |
+| `HealthModule`                     | liveness/readiness de API, PostgreSQL, Redis e MinIO         |
+| `JobsModule`                       | filas, retries, backoff, dead-letter e métricas              |
 
 Controllers só autenticam, validam, autorizam e delegam. Processamento de PDF, OCR, embeddings e LLM ocorre em jobs idempotentes.
 
@@ -107,13 +109,43 @@ stateDiagram-v2
 6. O worker escolhe `effectiveText` deterministicamente, cria chunks restritos à página e mantém `embedding = NULL`.
 7. Falhas e páginas ilegíveis são consultáveis e reprocessáveis por nova tentativa, sem apagar o histórico anterior.
 
-Classificação, associação, análise por LLM e embeddings continuam fora do worker da Fase 2 e serão adicionados sem refazer `Document`/`DocumentPage`. O fluxo detalhado está em `DOCUMENT_PIPELINE.md`.
+Na Fase 3, a classificação operacional e a associação foram adicionadas na API como regras determinísticas. O worker documental continua sem classificar por IA. Cada reprocessamento cria uma tentativa cujas páginas/chunks são imutáveis; somente os derivados da tentativa corrente são substituídos durante seu processamento. `AnalysisDocument` e `Evidence` já estão preparados para apontar uma tentativa/página exata, conforme `adr/ADR-001-DOCUMENT-PROCESSING-VERSIONING.md`.
+
+## 5.1. Camada legislativa determinística
+
+```mermaid
+flowchart LR
+  D["Document CLEAN + COMPLETED"] --> I["Inbox operacional"]
+  I --> P["Proposition REQUEST/INDICATION"]
+  I --> R["Response 0..N"]
+  P --> PA["PropositionAuthor PRIMARY/COAUTHOR"]
+  P --> PD["PropositionDocument"]
+  R --> RD["ResponseDocument"]
+  R --> AE["AssociationEvaluation"]
+  AE --> AC["AssociationCandidate + sinais"]
+  AC -->|"threshold + margem"| P
+  P --> DL["Deadline + configurationSnapshot"]
+  DL --> EX["DeadlineExtension"]
+  DL --> SU["DeadlineSuspension"]
+```
+
+- um arquivo é entidade distinta do evento administrativo que representa;
+- somente documentos `CLEAN` e `COMPLETED` podem receber vínculos operacionais;
+- regex apenas sugere tipo/número/ano e nunca cria proposição automaticamente;
+- associação automática exige simultaneamente score e margem configurados; empate ou ambiguidade vira revisão;
+- correções manuais usam versão otimista e geram revisão append-only;
+- `RESPONSE_RECEIVED` significa protocolo/associação recebida, não atendimento integral;
+- a política de prazo é separada por tipo e copiada integralmente no `Deadline` na criação.
 
 ## 6. Eventos, filas e consistência
 
 Fila BullMQ implementada:
 
 - `document-processing`: job tipado por documento/tentativa, segurança, extração, OCR e chunks;
+
+Fila BullMQ adicionada na Fase 3:
+
+- `deadline-maintenance`: varredura repetível e idempotente de `DUE_SOON`/`OVERDUE`.
 
 Filas futuras planejadas:
 
@@ -126,7 +158,7 @@ Filas futuras planejadas:
 
 Eventos de domínio são gravados em uma **transactional outbox** e publicados por worker. Cada consumidor registra idempotência por `eventId` ou chave de negócio. Jobs têm tentativas limitadas, backoff exponencial e estado consultável. Falha externa nunca remove o documento nem duplica mensagem.
 
-Eventos iniciais: `DocumentUploaded`, `DocumentProcessed`, `PropositionCreated`, `ResponseAssociated`, `AnalysisStarted`, `AnalysisCompleted`, `ResponseAnalysisCompleted`, `DeadlineApproaching`, `DeadlineExpired` e `NotificationRequested`.
+Eventos já produzidos: `DocumentUploaded`, `DocumentProcessed`, `PropositionCreated`, `ResponseCreated`, `ResponseAssociated`, `DeadlineCreated`, `DeadlineExtended`, `DeadlineApproaching` e `DeadlineExpired`. Eventos de análise/notificação continuam reservados para fases futuras; nenhum envio externo ocorre na Fase 3.
 
 ## 7. Autorização e escopo de dados
 
@@ -134,10 +166,10 @@ Eventos iniciais: `DocumentUploaded`, `DocumentProcessed`, `PropositionCreated`,
 | ------------- | ------------------------------------------------------------------------------- |
 | `ADMIN`       | administração, configurações e todos os registros permitidos pela classificação |
 | `SECRETARIAT` | ingestão, cadastro, correção, associação e revisão                              |
-| `COUNCILOR`   | suas proposições e documentos explicitamente compartilhados                     |
+| `COUNCILOR`   | autoria/coautoria preparada; política de gabinete ainda não exposta na Fase 3   |
 | `AUDITOR`     | leitura e auditoria; sem alteração de resultado                                 |
 
-Toda query de documento, chunk, análise e conversa recebe um `AccessScope` construído no backend. A recuperação vetorial inclui filtros SQL por IDs autorizados antes da ordenação por distância. URLs do MinIO são curtas e assinadas após a mesma verificação.
+Na operação da Fase 3, `ADMIN`, `SECRETARIAT` e `AUDITOR` consultam a camada legislativa; somente `ADMIN`/`SECRETARIAT` alteram cadastros, associações e prazos. Guards e serviços negam por padrão. O modelo de escopo aceita todos os autores/coautores para a futura política de gabinete, mas essa política não é presumida. URLs do MinIO continuam curtas e assinadas após autorização do backend.
 
 ## 8. API e contratos
 
@@ -176,6 +208,10 @@ PostgreSQL é a fonte de verdade. MinIO requer versionamento/backup; Redis é re
 | Antivírus         | interface `DocumentSecurityScanner` + ClamAV INSTREAM        | quarentena explícita e implementação substituível           |
 | Auth              | access JWT curto + refresh opaco rotativo em cookie HttpOnly | revogação e menor exposição no navegador                    |
 | Auditoria/eventos | audit append-only + transactional outbox                     | rastreabilidade e entrega confiável                         |
+| Associação        | sinais determinísticos + threshold e margem configuráveis    | decisão explicável e ambiguidade sempre revisável           |
+| Prazo             | política por tipo + snapshot por registro                    | mudança administrativa não altera histórico                 |
+| Concorrência      | constraints + versão otimista em resposta/prazo              | evita dupla associação/prorrogação                          |
+| Derivados PDF     | versionados por `DocumentProcessingAttempt`                  | evidência histórica nunca aponta página substituída         |
 | IA                | interface `LLMProvider`; Anthropic primeiro                  | troca de provider/modelo sem regra no SDK                   |
 | Datas             | `timestamptz` em UTC + timezone IANA configurado             | cálculo local correto e persistência inequívoca             |
 

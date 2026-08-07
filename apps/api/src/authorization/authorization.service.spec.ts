@@ -21,6 +21,10 @@ describe('AuthorizationService', () => {
     expect(service.canReadProposition(baseUser, 'councilor-2')).toBe(false);
   });
 
+  it('reconhece todos os coautores para a politica futura de visibilidade', () => {
+    expect(service.canReadProposition(baseUser, ['councilor-2', 'councilor-1'])).toBe(true);
+  });
+
   it.each(['ADMIN', 'SECRETARIAT', 'AUDITOR'] as const)('permite leitura ampla para %s', (role) => {
     expect(service.canReadProposition({ ...baseUser, roles: [role] }, 'councilor-2')).toBe(true);
   });

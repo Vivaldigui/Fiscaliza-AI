@@ -1,6 +1,7 @@
 import { unlink } from 'node:fs/promises';
 import {
   BadRequestException,
+  Body,
   Controller,
   Get,
   HttpCode,
@@ -25,6 +26,7 @@ import type { Request, Response } from 'express';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { Roles } from '../common/decorators/roles.decorator';
 import { ListDocumentsDto } from './dto/list-documents.dto';
+import { ClassifyDocumentDto } from './dto/classify-document.dto';
 import { DocumentsService } from './documents.service';
 
 @ApiTags('documents')
@@ -67,6 +69,29 @@ export class DocumentsController {
   @Roles(RoleCode.ADMIN, RoleCode.SECRETARIAT, RoleCode.AUDITOR)
   list(@Query() query: ListDocumentsDto) {
     return this.documents.list(query);
+  }
+
+  @Get('operational-inbox')
+  @Roles(RoleCode.ADMIN, RoleCode.SECRETARIAT, RoleCode.AUDITOR)
+  operationalInbox() {
+    return this.documents.operationalInbox();
+  }
+
+  @Get(':id/identification-suggestion')
+  @Roles(RoleCode.ADMIN, RoleCode.SECRETARIAT, RoleCode.AUDITOR)
+  identificationSuggestion(@Param('id', ParseUUIDPipe) id: string) {
+    return this.documents.identificationSuggestion(id);
+  }
+
+  @Post(':id/classification')
+  @Roles(RoleCode.ADMIN, RoleCode.SECRETARIAT)
+  classify(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: ClassifyDocumentDto,
+    @CurrentUser() user: AuthenticatedUser,
+    @Req() request: Request & { id?: string },
+  ) {
+    return this.documents.classify(id, dto.kind, user.id, request.id);
   }
 
   @Get(':id')

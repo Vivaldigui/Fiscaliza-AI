@@ -17,12 +17,14 @@ Ativos principais: documentos, dados pessoais, análises, credenciais, números 
 
 RBAC é combinado com escopo de objeto:
 
-- `COUNCILOR`: proposições de sua autoria e compartilhamentos explícitos;
+- `COUNCILOR`: modelo preparado para proposições de sua autoria/coautoria; exposição operacional adiada até a política institucional estar definida;
 - `SECRETARIAT`: upload, consulta, download de arquivo aprovado e reprocessamento;
 - `AUDITOR`: consulta/download de arquivo aprovado e auditoria, sem upload/reprocessamento;
 - `ADMIN`: configuração e gestão, respeitando classificação/restrições futuras.
 
-Guards e services aplicam políticas no backend. IDs recebidos nunca são usados antes de verificar escopo. O frontend apenas oculta ações; não é barreira de segurança. Toda busca vetorial filtra documentos autorizados no SQL.
+Na Fase 3, `ADMIN`/`SECRETARIAT` podem criar e alterar proposições, respostas, associações, prazos e feriados; `AUDITOR` tem leitura. O serviço de autorização aceita todos os autores da proposição para o futuro escopo por gabinete, mas não libera `COUNCILOR` antes da decisão institucional. Guards e services aplicam políticas no backend. IDs recebidos nunca são usados antes de verificar escopo. O frontend apenas oculta ações; não é barreira de segurança.
+
+Vínculos de documentos exigem `securityStatus = CLEAN` e `processingStatus = COMPLETED`. `INFECTED`, `SKIPPED`, falha de scan ou simples `NEEDS_REVIEW` não recebem exceção implícita. A mesma autorização do documento continua sendo aplicada antes de gerar a URL assinada, evitando IDOR por vínculo legislativo.
 
 ## 4. Upload e arquivos
 
@@ -57,6 +59,8 @@ Guards e services aplicam políticas no backend. IDs recebidos nunca são usados
 - CSP e headers do Next.js; nenhum segredo usa prefixo público de ambiente.
 - Swagger desabilitável/restrito em produção.
 - Erros não expõem stack, SQL, caminhos, prompts ou credenciais.
+- Mutações de associação e prazo recebem a versão observada; `updateMany` condicionado impede que duas decisões concorrentes se sobrescrevam.
+- Constraints no PostgreSQL impedem duplicação da identidade da proposição, autoria, vínculo documental, documento principal, concessão por pedido e suspensão aberta.
 
 ## 7. Integrações e segredos
 
@@ -66,7 +70,9 @@ Webhooks usam TLS, segredo/assinatura, comparação constante, janela de timesta
 
 ## 8. Auditoria
 
-Eventos auditáveis incluem login, leitura/download sensível, upload, associação, correção, revisão, mudança de prazo/configuração/permissão, emissão de URL e ação de integração. `AuditLog` é append-only para a aplicação. Estado anterior/posterior é redigido e limitado; PDFs completos e tokens não entram.
+Eventos auditáveis incluem login, leitura/download sensível, upload, criação/alteração de proposição, vínculo documental, resposta, avaliação/associação/correção, feriado e mudança de prazo/configuração/permissão. `AuditLog` é append-only para a aplicação. Estado anterior/posterior e sinais ficam limitados a IDs e metadados mínimos; PDFs completos, texto integral de páginas e tokens não entram.
+
+`ResponseAssociationRevision`, `DeadlineExtension` e `DeadlineSuspension` preservam o histórico de negócio além da auditoria genérica. Páginas/chunks são versionados por tentativa; uma futura evidência usa `documentPageId` imutável, não apenas número de página mutável.
 
 Produção deve exportar logs de auditoria para armazenamento com retenção/imutabilidade e acesso separado. Relógios dos hosts precisam de sincronização.
 
@@ -97,6 +103,8 @@ Produção deve exportar logs de auditoria para armazenamento com retenção/imu
 - [ ] Provisionar secret manager e rotação.
 - [ ] Trocar bootstrap admin e habilitar MFA/SSO conforme decisão.
 - [ ] Testar IDOR em documentos, chunks, análises e URLs assinadas.
+- [ ] Aprovar a visibilidade entre gabinetes e então habilitar as rotas para `COUNCILOR`.
+- [ ] Validar juridicamente as políticas `REQUEST` e `INDICATION`, a regra de dia inicial e o tratamento de dia não útil.
 - [ ] Fazer threat modeling da UAZAPI/n8n e validar assinatura real disponível.
 - [ ] Testar restauração de PostgreSQL e MinIO.
 - [ ] Executar SAST, dependency scan, container scan e teste de penetração.

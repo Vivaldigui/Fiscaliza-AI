@@ -29,6 +29,8 @@ stateDiagram-v2
 
 `COMPLETED` não volta a uma etapa ativa. `FAILED` e `NEEDS_REVIEW` só voltam a `QUARANTINED` por um pedido explícito de reprocessamento, que cria uma nova `DocumentProcessingAttempt`. O erro anterior permanece nessa tentativa e na auditoria.
 
+Desde a Fase 3, `DocumentPage` e `DocumentChunk` pertencem também à tentativa que os produziu. As chaves únicas são por tentativa/página, e o worker só substitui derivados da própria tentativa corrente. Tentativas concluídas anteriores nunca são apagadas pelo reprocessamento. `AnalysisDocument.processingAttemptId` e `Evidence.documentPageId` preparam a futura análise para congelar a versão exata usada, conforme `adr/ADR-001-DOCUMENT-PROCESSING-VERSIONING.md`.
+
 ## Armazenamento privado e quarentena
 
 - Entrada: `quarantine/{documentId}/original.pdf`.
@@ -87,7 +89,7 @@ O provider local usa Poppler para renderizar somente as páginas necessárias e 
 
 ## Chunks
 
-Chunking ocorre por página, após escolher o texto efetivo. Primeiro tenta limites de parágrafo, linha e sentença; se necessário aplica tamanho e overlap configuráveis. Um chunk nunca atravessa página e guarda `documentId`, `pageId`, `pageNumber`, `sequence`, conteúdo e SHA-256. `embedding` permanece `NULL` até decisão arquitetural da Fase 5.
+Chunking ocorre por página, após escolher o texto efetivo. Primeiro tenta limites de parágrafo, linha e sentença; se necessário aplica tamanho e overlap configuráveis. Um chunk nunca atravessa página e guarda `documentId`, `processingAttemptId`, `pageId`, `pageNumber`, `sequence`, conteúdo e SHA-256. `embedding` permanece `NULL` até decisão arquitetural da Fase 5.
 
 ## Watcher
 

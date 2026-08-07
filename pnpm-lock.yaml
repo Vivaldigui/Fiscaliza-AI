@@ -190,6 +190,9 @@ importers:
       '@fiscaliza/document-processing':
         specifier: workspace:*
         version: link:../../packages/document-processing
+      '@fiscaliza/shared':
+        specifier: workspace:*
+        version: link:../../packages/shared
       bullmq:
         specifier: 6.0.9
         version: 6.0.9(ioredis@5.7.0(supports-color@8.1.1))
