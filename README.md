@@ -1,6 +1,6 @@
 # Fiscaliza AI
 
-Aplicação interna, estruturada e auditável para acompanhar requerimentos, indicações, respostas, evidências e prazos de uma Câmara Municipal. Esta entrega implementa a **Fase 1 (fundação)** e documenta as fases seguintes.
+Aplicação interna, estruturada e auditável para acompanhar requerimentos, indicações, respostas, evidências e prazos de uma Câmara Municipal. Esta entrega implementa a **Fase 2 (ingestão documental)** sobre a fundação segura da Fase 1.
 
 ## O que já está implementado
 
@@ -11,10 +11,14 @@ Aplicação interna, estruturada e auditável para acompanhar requerimentos, ind
 - health checks para PostgreSQL, Redis e MinIO;
 - dashboard responsivo e acessível com navegação do MVP;
 - PostgreSQL/pgvector, Redis, MinIO, API e web via Docker Compose;
+- worker BullMQ independente, outbox transacional e watcher de `/data/inbox`;
+- upload PDF autenticado, SHA-256 em streaming, deduplicação e quarentena no MinIO privado;
+- ClamAV, extração PDF página a página, avaliação de qualidade, OCR condicional e chunks sem embeddings;
+- consulta operacional, texto por página, download assinado, revisão e reprocessamento;
 - abstração `LLMProvider`, implementação inicial Anthropic e prompts versionados (a ativação do pipeline é Fase 4);
 - contratos e exemplos inativos de workflows n8n.
 
-Upload, extração/OCR, filas documentais, associação, prazos operacionais, análise, RAG e WhatsApp end-to-end estão deliberadamente nas fases 2–5 de `docs/IMPLEMENTATION_PLAN.md`.
+Classificação/associação, prazos operacionais, análise por IA, embeddings, RAG e WhatsApp end-to-end permanecem deliberadamente nas fases 3–5 de `docs/IMPLEMENTATION_PLAN.md`. A Fase 2 nunca chama LLM nem cria embeddings.
 
 ## Pré-requisitos
 
@@ -33,12 +37,12 @@ Nunca envie `.env` ao Git. As variáveis `LLM_API_KEY`, `UAZAPI_TOKEN`, `MINIO_S
 ## Execução com Docker
 
 ```bash
-docker compose up -d postgres redis minio minio-init
+docker compose up -d postgres redis minio minio-init clamav
 pnpm install
 pnpm db:generate
 pnpm db:deploy
 pnpm db:seed
-docker compose up --build api web
+docker compose up --build api worker web
 ```
 
 Ou, depois de existir uma migration e o seed já ter sido executado:
@@ -51,7 +55,10 @@ docker compose up --build
 - API: http://localhost:3001/api/v1
 - Swagger: http://localhost:3001/api/docs
 - Health: http://localhost:3001/health
+- Readiness do worker: http://localhost:3002/health/ready
 - Console MinIO: http://localhost:9001
+
+PDFs também podem ser colocados em `data/inbox/`. O watcher aguarda estabilidade do arquivo, usa o mesmo pipeline do upload e move a entrada para `processed/`, `processed/duplicates/` ou `rejected/`.
 
 O Compose não inicia n8n; integra-se a uma instalação existente conforme `infra/n8n/README.md`.
 
@@ -77,7 +84,7 @@ pnpm test
 pnpm build
 ```
 
-Testes de integração que dependem de infraestrutura serão adicionados/expandidos junto aos módulos das fases correspondentes. Fixtures devem ser inteiramente fictícias.
+O CI também valida Prisma e migration em PostgreSQL limpo. Os testes documentais usam apenas fixtures sintéticas; a validação Docker real executada nesta fase está registrada em `docs/PHASE_2_REPORT.md`.
 
 ## Bootstrap e seed
 
@@ -93,5 +100,8 @@ Configurações seed (todas editáveis e auditáveis): prazo inicial, prorrogaç
 - `docs/WHATSAPP_FLOW.md`
 - `docs/SECURITY.md`
 - `docs/IMPLEMENTATION_PLAN.md`
+- `docs/DOCUMENT_PIPELINE.md`
+- `docs/PHASE_1_REPORT.md`
+- `docs/PHASE_2_REPORT.md`
 
 Antes de produção, trate como bloqueadores o checklist de segurança, a política LGPD, a regra administrativa exata de contagem, o antivírus/quarentena, o contrato real da UAZAPI e os testes de restauração.

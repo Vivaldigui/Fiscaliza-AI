@@ -29,4 +29,11 @@ describe('AuthorizationService', () => {
     expect(service.canConfigureSystem(baseUser)).toBe(false);
     expect(service.canConfigureSystem({ ...baseUser, roles: ['ADMIN'] })).toBe(true);
   });
+
+  it('restringe ingestão documental a administrador e secretaria', () => {
+    expect(service.canManageDocuments(baseUser)).toBe(false);
+    expect(service.canManageDocuments({ ...baseUser, roles: ['AUDITOR'] })).toBe(false);
+    expect(service.canManageDocuments({ ...baseUser, roles: ['ADMIN'] })).toBe(true);
+    expect(service.canManageDocuments({ ...baseUser, roles: ['SECRETARIAT'] })).toBe(true);
+  });
 });

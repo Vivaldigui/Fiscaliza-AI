@@ -5,5 +5,6 @@ export interface ProblemDetails {
   detail?: string;
   instance?: string;
   requestId?: string;
+  code?: string;
   errors?: Record<string, string[]>;
 }

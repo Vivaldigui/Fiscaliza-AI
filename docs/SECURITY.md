@@ -18,21 +18,25 @@ Ativos principais: documentos, dados pessoais, análises, credenciais, números 
 RBAC é combinado com escopo de objeto:
 
 - `COUNCILOR`: proposições de sua autoria e compartilhamentos explícitos;
-- `SECRETARIAT`: operações documentais e revisão;
-- `AUDITOR`: leitura/auditoria;
+- `SECRETARIAT`: upload, consulta, download de arquivo aprovado e reprocessamento;
+- `AUDITOR`: consulta/download de arquivo aprovado e auditoria, sem upload/reprocessamento;
 - `ADMIN`: configuração e gestão, respeitando classificação/restrições futuras.
 
 Guards e services aplicam políticas no backend. IDs recebidos nunca são usados antes de verificar escopo. O frontend apenas oculta ações; não é barreira de segurança. Toda busca vetorial filtra documentos autorizados no SQL.
 
 ## 4. Upload e arquivos
 
-- Allowlist inicial: PDF (`application/pdf`) verificado por assinatura `%PDF-`, MIME declarado e inspeção do parser.
+- Allowlist inicial: PDF (`application/pdf`) verificado por extensão, MIME declarado, assinatura `%PDF-` e inspeção estrutural posterior pelo parser. Nenhum sinal enviado pelo cliente é confiável isoladamente.
 - Limite configurável de bytes, páginas e tempo de processamento.
 - Nome do arquivo é sanitizado apenas para exibição; `storageKey` é gerado internamente.
 - SHA-256 calculado em streaming antes da persistência final; deduplicação é transacional.
-- Arquivo fica em bucket privado; acesso por URL assinada de curta duração após autorização.
-- Parser/OCR executa em worker isolável, sem macros, JavaScript, shell ou acesso a segredos; antivírus (ClamAV) é requisito antes de produção.
-- PDF suspeito/falha de parse entra em quarentena/revisão, não no pipeline de IA.
+- Arquivo nasce em chave de quarentena no bucket privado. Apenas resultado ClamAV `CLEAN` promove a chave; `INFECTED`, `SKIPPED` e falhas não liberam URL.
+- O backend autoriza antes de emitir URL assinada curta. O frontend nunca conhece credenciais nem constrói URL MinIO.
+- Parser PDF roda em subprocesso com memória/tempo limitados e `isEvalSupported=false`; PDF.js não executa JavaScript incorporado. O ambiente do subprocesso contém somente variáveis operacionais permitidas, sem segredos da aplicação.
+- OCR usa `execFile` com argumentos separados, allowlist de idioma, timeout, concorrência limitada e ambiente redigido; não executa comandos derivados do documento.
+- ClamAV usa protocolo `INSTREAM` pela rede privada do Compose. Desabilitar antivírus é explícito, gera `SKIPPED`/revisão e é recusável em produção por `DOCUMENT_ANTIVIRUS_REQUIRED=true`.
+- PDF infectado permanece isolado e auditado; não há exclusão automática sem política de retenção. PDF inválido/falha de parse termina em revisão/falha, nunca no pipeline de IA.
+- A API recebe em arquivo temporário aleatório, impõe um arquivo/campos/tamanho e sempre remove o temporário após ingestão ou rejeição.
 
 ## 5. Prompt injection e IA
 
@@ -88,7 +92,7 @@ Produção deve exportar logs de auditoria para armazenamento com retenção/imu
 ## 11. Checklist antes de produção
 
 - [ ] Definir política LGPD, classificação e retenção.
-- [ ] Habilitar antivírus/quarentena e isolamento de parser/OCR.
+- [ ] Manter antivírus obrigatório, atualizar assinaturas e validar isolamento/limites de parser e OCR no ambiente produtivo.
 - [ ] Configurar TLS, proxy confiável, CORS e CSP para domínios reais.
 - [ ] Provisionar secret manager e rotação.
 - [ ] Trocar bootstrap admin e habilitar MFA/SSO conforme decisão.

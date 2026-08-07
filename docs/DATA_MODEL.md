@@ -23,6 +23,8 @@ erDiagram
   Document ||--o{ PropositionDocument : links
   Document ||--o{ DocumentPage : contains
   Document ||--o{ DocumentChunk : chunks
+  Document ||--o{ DocumentProcessingAttempt : attempts
+  User o|--o{ DocumentProcessingAttempt : requests
   Proposition ||--o{ Response : receives
   Response ||--o{ ResponseDocument : has
   Document ||--o{ ResponseDocument : links
@@ -73,15 +75,21 @@ Item atômico de verificação, com sequência única dentro da proposição, te
 
 ### `Document`
 
-Metadados do original: nome, MIME, `storageKey`, SHA-256 único, tamanho, páginas, estados de extração/OCR/processamento, textos agregados opcionais e confiança. `classification` e `accessLevel` preparam LGPD e restrição futura.
+Metadados do original: nome sanitizado, MIME validado, `storageKey`, SHA-256 único, tamanho, páginas, origem (`UPLOAD`/`INBOX`), autor do upload, estados de segurança/extração/OCR/processamento, textos agregados opcionais e confiança. Também conserva tentativa corrente, erro seguro, timestamps por etapa e `reviewRequired`. `kind` e `accessLevel` preparam classificação e restrição futuras.
+
+O objeto começa em `quarantine/{documentId}/original.pdf`. Somente após `securityStatus = CLEAN` sua chave muda para `documents/{anoUTC}/{documentId}/original.pdf`. Um resultado `SKIPPED`, `INFECTED` ou `FAILED` não libera download.
 
 ### `DocumentPage`
 
-Chave `(documentId, pageNumber)`, texto extraído, OCR opcional, texto efetivo e confiança. Páginas começam em 1. Evidências referenciam esta chave composta, impedindo página fabricada no banco.
+Chave `(documentId, pageNumber)`, `extractedText`, `ocrText`, `effectiveText`, fonte efetiva, quantidade de caracteres, score/razão de qualidade, necessidade/estado/confiança de OCR. Páginas começam em 1 e correspondem à ordem física entregue pelo parser. Evidências futuras referenciam a página persistida, impedindo página fabricada no banco.
+
+### `DocumentProcessingAttempt`
+
+Histórico imutável por `(documentId, attempt)`: gatilho (`UPLOAD`, `INBOX` ou `REPROCESS`), estado, solicitante, erro seguro e timestamps. Reprocessar incrementa a tentativa e recalcula somente páginas/chunks derivados; tentativas e auditorias anteriores permanecem.
 
 ### `DocumentChunk`
 
-Trecho derivado de uma única página, com posição, conteúdo, hash e embedding `vector`. O MVP adotará dimensão configurada pela migration; alteração de provider de embedding exige nova coluna/índice ou reindexação versionada.
+Trecho derivado de uma única página, com página, sequência, conteúdo e SHA-256. Na Fase 2, `embedding` permanece obrigatoriamente `NULL`. A coluna física existente é `vector(1536)`; provider, dimensão, coluna/índice versionado e estratégia de reindexação precisam de ADR antes da Fase 5.
 
 ### Vínculos de documento
 
@@ -184,6 +192,8 @@ Outbox transacional para publicação confiável; consumidor registra evento pro
 - unique em `Proposition(type, number, year)`;
 - unique em `Document.sha256` e `Document.storageKey`;
 - unique em `DocumentPage(documentId, pageNumber)`;
+- unique em `DocumentProcessingAttempt(documentId, attempt)`;
+- unique em `DocumentChunk(documentId, pageNumber, sequence)`; `contentHash` permite cache/controle de derivação;
 - unique em `RequestedItem(propositionId, sequence)`;
 - unique em `InboundMessage(instance, messageId)`;
 - unique em `Analysis.inputHash` por operação/versão quando reutilizável;
@@ -195,3 +205,9 @@ Outbox transacional para publicação confiável; consumidor registra evento pro
 ## 11. Retenção e classificação
 
 `accessLevel` começa com `INTERNAL`, `RESTRICTED` e `PUBLIC`, mas nenhum documento é público por inferência. Políticas futuras podem mascarar PII em chunks e respostas de chat sem modificar o original sob retenção legal. Exclusão deve distinguir bytes no S3, derivados, índices e registros sujeitos a auditoria.
+
+## 12. Decisões deliberadamente adiadas
+
+- A unicidade atual de proposição continua `(type, number, year)`. A Câmara deve decidir na Fase 3 se unidade/origem também integra a identidade.
+- `ResponseExtension` representa documento/resposta complementar; `DeadlineExtension` representa alteração imutável do prazo. A nomenclatura e os fluxos serão revisados conceitualmente na Fase 3, sem mudança oportunista na Fase 2.
+- A dimensão fixa de `DocumentChunk.embedding` não define provider. Embeddings não são calculados nesta fase e exigem decisão versionada na Fase 5.

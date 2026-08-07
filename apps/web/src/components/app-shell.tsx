@@ -8,6 +8,7 @@ import { Icon } from './icons';
 
 const navigation = [
   { href: '/dashboard', label: 'Visão geral', icon: 'dashboard' },
+  { href: '/documentos', label: 'Documentos', icon: 'file' },
   { href: '/requerimentos', label: 'Requerimentos', icon: 'file' },
   { href: '/indicacoes', label: 'Indicações', icon: 'file' },
   { href: '/respostas', label: 'Respostas', icon: 'response' },
@@ -71,7 +72,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           </p>
           <ul className="space-y-1">
             {navigation.map((item) => {
-              const active = pathname === item.href;
+              const active = pathname === item.href || pathname.startsWith(`${item.href}/`);
               return (
                 <li key={item.href}>
                   <Link

@@ -16,6 +16,7 @@
     "test:integration": "turbo run test:integration",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
+    "db:validate": "pnpm --filter @fiscaliza/database db:validate",
     "db:generate": "pnpm --filter @fiscaliza/database db:generate",
     "db:migrate": "pnpm --filter @fiscaliza/database db:migrate",
     "db:deploy": "pnpm --filter @fiscaliza/database db:deploy",
