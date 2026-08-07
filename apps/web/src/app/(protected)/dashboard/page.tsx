@@ -8,18 +8,22 @@ interface Summary {
   requests: number;
   indications: number;
   awaitingResponse: number;
-  analyzedResponses: number;
+  responsesReceived: number;
+  dueToday: number;
   dueSoon: number;
   overdue: number;
+  pendingAssociations: number;
 }
 
 const emptySummary: Summary = {
   requests: 0,
   indications: 0,
   awaitingResponse: 0,
-  analyzedResponses: 0,
+  responsesReceived: 0,
+  dueToday: 0,
   dueSoon: 0,
   overdue: 0,
+  pendingAssociations: 0,
 };
 
 export default function DashboardPage() {
@@ -37,24 +41,42 @@ export default function DashboardPage() {
       value: summary.awaitingResponse,
       hint: 'Proposições ativas',
       tone: 'text-brand-700 bg-brand-50',
+      href: '/proposicoes?status=AWAITING_RESPONSE',
     },
     {
       label: 'Vencem em breve',
       value: summary.dueSoon,
       hint: 'Conforme configuração',
       tone: 'text-amber bg-amber/10',
+      href: '/prazos?status=DUE_SOON',
     },
     {
       label: 'Vencidos',
       value: summary.overdue,
       hint: 'Exigem acompanhamento',
       tone: 'text-danger bg-red-50',
+      href: '/prazos?status=OVERDUE',
     },
     {
-      label: 'Respostas analisadas',
-      value: summary.analyzedResponses,
-      hint: 'Processamento concluído',
+      label: 'Resposta recebida',
+      value: summary.responsesReceived,
+      hint: 'Protocoladas e associadas',
       tone: 'text-blue-700 bg-blue-50',
+      href: '/respostas?status=ASSOCIATED',
+    },
+    {
+      label: 'Associação pendente',
+      value: summary.pendingAssociations,
+      hint: 'Requer revisão da Secretaria',
+      tone: 'text-amber bg-amber/10',
+      href: '/associacoes',
+    },
+    {
+      label: 'Vence hoje',
+      value: summary.dueToday,
+      hint: 'Ação imediata',
+      tone: 'text-danger bg-red-50',
+      href: '/prazos',
     },
   ];
 
@@ -83,18 +105,22 @@ export default function DashboardPage() {
         </div>
       ) : null}
       <section
-        className="mt-8 grid gap-4 sm:grid-cols-2 xl:grid-cols-4"
+        className="mt-8 grid gap-4 sm:grid-cols-2 xl:grid-cols-3"
         aria-label="Indicadores principais"
       >
         {metrics.map((metric) => (
-          <article className="card p-5" key={metric.label}>
+          <Link
+            href={metric.href}
+            className="card block p-5 transition hover:-translate-y-0.5 hover:shadow-md"
+            key={metric.label}
+          >
             <div className={`mb-6 grid size-10 place-items-center rounded-xl ${metric.tone}`}>
               <span className="size-2.5 rounded-full bg-current" />
             </div>
             <p className="text-3xl font-semibold tracking-tight">{metric.value}</p>
             <p className="mt-1 text-sm font-medium">{metric.label}</p>
             <p className="mt-1 text-xs text-black/40">{metric.hint}</p>
-          </article>
+          </Link>
         ))}
       </section>
       <section className="mt-6 grid gap-6 xl:grid-cols-[1.4fr_.6fr]">

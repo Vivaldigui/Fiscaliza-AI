@@ -5,9 +5,14 @@ const broadReadRoles: RoleCodeValue[] = ['ADMIN', 'SECRETARIAT', 'AUDITOR'];
 
 @Injectable()
 export class AuthorizationService {
-  canReadProposition(user: AuthenticatedUser, authorCouncilorId: string): boolean {
+  canReadProposition(user: AuthenticatedUser, authorCouncilorIds: string | string[]): boolean {
     if (user.roles.some((role) => broadReadRoles.includes(role))) return true;
-    return user.roles.includes('COUNCILOR') && user.councilorId === authorCouncilorId;
+    const authors = Array.isArray(authorCouncilorIds) ? authorCouncilorIds : [authorCouncilorIds];
+    return (
+      user.roles.includes('COUNCILOR') &&
+      user.councilorId !== null &&
+      authors.includes(user.councilorId)
+    );
   }
 
   canManageDocuments(user: AuthenticatedUser): boolean {

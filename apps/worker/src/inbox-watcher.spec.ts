@@ -108,6 +108,7 @@ function config(root: string): WorkerConfig {
     OUTBOX_POLL_INTERVAL_MS: 1_000,
     OUTBOX_BATCH_SIZE: 20,
     WORKER_HEALTH_PORT: 3002,
+    DEADLINE_SWEEP_INTERVAL_MS: 60_000,
   };
 }
 

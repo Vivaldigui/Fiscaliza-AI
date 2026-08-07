@@ -24,6 +24,7 @@ interface DocumentDetail {
   sha256: string;
   sizeBytes: string;
   pageCount: number | null;
+  kind: string;
   processingStatus: string;
   textExtractionStatus: string;
   ocrStatus: string;
@@ -58,6 +59,17 @@ interface UserIdentity {
   roles: string[];
 }
 
+interface IdentificationSuggestion {
+  suggestions: Array<{
+    type: 'REQUEST' | 'INDICATION';
+    number: number;
+    year: number;
+    excerpt: string;
+  }>;
+  confidence: number;
+  needsReview: boolean;
+}
+
 const active = new Set([
   'RECEIVED',
   'QUARANTINED',
@@ -74,6 +86,7 @@ export default function DocumentDetailPage({ params }: { params: Promise<{ id: s
   const [roles, setRoles] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [working, setWorking] = useState(false);
+  const [suggestion, setSuggestion] = useState<IdentificationSuggestion | null>(null);
 
   const load = useCallback(
     async (silent = false) => {
@@ -95,6 +108,9 @@ export default function DocumentDetailPage({ params }: { params: Promise<{ id: s
     void Promise.all([
       load(),
       apiFetch<UserIdentity>('/auth/me').then((user) => setRoles(user.roles)),
+      apiFetch<IdentificationSuggestion>(`/documents/${id}/identification-suggestion`).then(
+        setSuggestion,
+      ),
     ]);
   }, [load]);
   useEffect(() => {
@@ -129,6 +145,22 @@ export default function DocumentDetailPage({ params }: { params: Promise<{ id: s
       await load(true);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Não foi possível reprocessar.');
+    } finally {
+      setWorking(false);
+    }
+  }
+
+  async function classify(kind: string) {
+    setWorking(true);
+    setError(null);
+    try {
+      await apiFetch(`/documents/${id}/classification`, {
+        method: 'POST',
+        body: JSON.stringify({ kind }),
+      });
+      await load(true);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Falha ao classificar documento.');
     } finally {
       setWorking(false);
     }
@@ -204,6 +236,60 @@ export default function DocumentDetailPage({ params }: { params: Promise<{ id: s
             <div className="mt-6 rounded-xl border border-amber/30 bg-amber/10 p-4 text-sm text-amber">
               <strong>{document.lastErrorCode ?? 'Atenção'}:</strong> {document.processingError}
             </div>
+          ) : null}
+
+          {canManage && document.processingStatus === 'COMPLETED' ? (
+            <section className="card mt-6 p-5 sm:p-6">
+              <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+                <div>
+                  <h2 className="font-semibold">Identificação operacional</h2>
+                  <p className="mt-1 text-sm text-black/50">
+                    Classificação atual: <strong>{document.kind}</strong>. Regex é apenas sugestão.
+                  </p>
+                  {suggestion?.suggestions.map((item) => (
+                    <p
+                      key={`${item.type}-${item.number}-${item.year}`}
+                      className="mt-2 text-xs text-brand-700"
+                    >
+                      Sugestão: {item.type === 'REQUEST' ? 'Requerimento' : 'Indicação'}{' '}
+                      {item.number}/{item.year} · confiança {suggestion.confidence.toFixed(2)}
+                    </p>
+                  ))}
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {(
+                    [
+                      ['PROPOSITION', 'Proposição'],
+                      ['RESPONSE', 'Resposta'],
+                      ['EXTENSION', 'Prorrogação'],
+                      ['ATTACHMENT', 'Anexo'],
+                      ['UNKNOWN', 'Desconhecido'],
+                    ] as const
+                  ).map(([kind, label]) => (
+                    <button
+                      key={kind}
+                      disabled={working}
+                      onClick={() => void classify(kind)}
+                      className="rounded-lg border border-black/10 px-3 py-2 text-xs font-semibold hover:bg-black/5 disabled:opacity-50"
+                    >
+                      {label}
+                    </button>
+                  ))}
+                  <Link
+                    href="/proposicoes/nova"
+                    className="rounded-lg bg-brand-600 px-3 py-2 text-xs font-semibold text-white"
+                  >
+                    Criar proposição
+                  </Link>
+                  <Link
+                    href="/respostas/nova"
+                    className="rounded-lg bg-brand-600 px-3 py-2 text-xs font-semibold text-white"
+                  >
+                    Criar resposta
+                  </Link>
+                </div>
+              </div>
+            </section>
           ) : null}
 
           <section className="mt-7 grid gap-5 lg:grid-cols-[1fr_.65fr]">

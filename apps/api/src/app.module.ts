@@ -17,6 +17,11 @@ import { InfrastructureModule } from './infrastructure/infrastructure.module';
 import { SettingsModule } from './settings/settings.module';
 import { UsersModule } from './users/users.module';
 import { DocumentsModule } from './documents/documents.module';
+import { AssociationsModule } from './associations/associations.module';
+import { DeadlinesModule } from './deadlines/deadlines.module';
+import { HolidaysModule } from './holidays/holidays.module';
+import { PropositionsModule } from './propositions/propositions.module';
+import { ResponsesModule } from './responses/responses.module';
 
 @Module({
   imports: [
@@ -66,6 +71,11 @@ import { DocumentsModule } from './documents/documents.module';
     DashboardModule,
     HealthModule,
     DocumentsModule,
+    AssociationsModule,
+    DeadlinesModule,
+    HolidaysModule,
+    PropositionsModule,
+    ResponsesModule,
   ],
   providers: [
     { provide: APP_GUARD, useClass: ThrottlerGuard },

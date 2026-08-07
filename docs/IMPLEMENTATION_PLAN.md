@@ -49,14 +49,20 @@ Entregas pequenas, migráveis e testáveis. Nenhuma fase depende de mocks silenc
 
 ## Fase 3 — Proposições, associação e prazos
 
-- CRUD completo de requerimentos/indicações e documentos;
-- classificação/metadados estruturados;
-- `DocumentAssociationService` com candidatos, threshold e margem;
-- resposta 1:N, associação manual e auditoria;
-- `DeadlineService` com dias corridos/úteis, feriados, suspensão e prorrogações imutáveis;
-- filtros/timeline e telas de proposições, respostas, pendências e prazos.
+**Status:** implementada e validada em 2026-08-07. Detalhes e evidências estão em `PHASE_3_REPORT.md`.
+
+- CRUD completo de requerimentos/indicações, coautoria e vínculos de documentos existentes;
+- classificação operacional e sugestões de metadados exclusivamente por regex;
+- associação determinística com avaliação/candidatos, sinais explicáveis, threshold e margem;
+- respostas 1:N, múltiplos documentos, associação manual, concorrência e histórico append-only;
+- `DeadlineService` por tipo com snapshot, dias corridos/úteis, feriados, suspensão e prorrogações imutáveis;
+- worker idempotente de `DUE_SOON`/`OVERDUE`, outbox e observabilidade;
+- filtros, timeline e telas de proposições, respostas, associações, prazos e feriados;
+- versionamento dos derivados documentais por `DocumentProcessingAttempt` para proteger evidências futuras.
 
 **Critério:** associação ambígua nunca vincula; casos de calendário e extensão passam nos testes.
+
+**Resultado:** fluxo operacional completo disponível sem Swagger; migration incremental validada sobre a Fase 2 e em banco limpo; nenhuma chamada a LLM, embedding, RAG ou notificação externa foi adicionada.
 
 ## Fase 4 — IA estruturada e revisão
 
@@ -119,9 +125,9 @@ Entregas pequenas, migráveis e testáveis. Nenhuma fase depende de mocks silenc
 
 As decisões abaixo não bloqueiam a fundação; defaults conservadores serão usados até aprovação:
 
-1. Regra exata de contagem: inclui/exclui dia do protocolo, vencimento em dia não útil e efeito de suspensão.
+1. Validar institucionalmente os defaults versionados de contagem (`EXCLUDE_START_DATE`, ajuste para `NEXT_BUSINESS_DAY`) e o efeito formal da suspensão.
 2. Calendário de feriados: municipal/estadual/nacional e expediente excepcional.
-3. Se `INDICATION` também possui prazo formal e quais eventos o encerram.
+3. Confirmar se `INDICATION` possui prazo formal; a arquitetura já usa política independente por tipo, mas o default inicial é igual ao de requerimento.
 4. Origem/unidade na chave quando houver numeração duplicada entre legislaturas/setores.
 5. Política de visibilidade entre vereadores, assessores, Secretaria e Auditoria.
 6. Classificação, retenção, base legal e possibilidade de enviar conteúdo ao provider LLM escolhido.
@@ -145,3 +151,9 @@ As decisões abaixo não bloqueiam a fundação; defaults conservadores serão u
 - uma fila documental tipada por tentativa, com outbox e job ID determinístico;
 - ClamAV via `DocumentSecurityScanner` e Tesseract/Poppler via `OcrProvider` substituível;
 - chunks confinados à página e `embedding = NULL` durante toda a Fase 2.
+- derivados imutáveis por `DocumentProcessingAttempt`, conforme ADR-001;
+- coautoria N:N com exatamente um autor principal;
+- associação determinística com pesos normalizados e decisão conjunta por threshold+margem;
+- `Deadline.configurationSnapshot` com política e calendário aplicável;
+- pedido de prorrogação separado da alteração efetiva do vencimento;
+- versões otimistas e constraints parciais para operações concorrentes.

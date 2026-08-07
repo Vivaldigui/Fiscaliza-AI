@@ -239,12 +239,25 @@ export class DocumentProcessingStateService {
           return;
         throw new Error('Documento não está pronto para persistir o resultado.');
       }
-      await transaction.documentChunk.deleteMany({ where: { documentId: input.documentId } });
-      await transaction.documentPage.deleteMany({ where: { documentId: input.documentId } });
+      const processingAttempt = await transaction.documentProcessingAttempt.findUniqueOrThrow({
+        where: {
+          documentId_attempt: { documentId: input.documentId, attempt: input.attempt },
+        },
+        select: { id: true },
+      });
+      // Idempotência de retry: somente os derivados incompletos desta tentativa podem ser refeitos.
+      // Tentativas anteriores são versões históricas e nunca são removidas.
+      await transaction.documentChunk.deleteMany({
+        where: { processingAttemptId: processingAttempt.id },
+      });
+      await transaction.documentPage.deleteMany({
+        where: { processingAttemptId: processingAttempt.id },
+      });
       for (const page of input.pages) {
         const created = await transaction.documentPage.create({
           data: {
             documentId: input.documentId,
+            processingAttemptId: processingAttempt.id,
             pageNumber: page.pageNumber,
             extractedText: page.extractedText || null,
             ocrText: page.ocrText,
@@ -263,6 +276,7 @@ export class DocumentProcessingStateService {
           await transaction.documentChunk.createMany({
             data: page.chunks.map((chunk) => ({
               documentId: input.documentId,
+              processingAttemptId: processingAttempt.id,
               pageId: created.id,
               pageNumber: page.pageNumber,
               sequence: chunk.sequence,

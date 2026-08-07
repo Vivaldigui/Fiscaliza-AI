@@ -12,6 +12,7 @@ import { UnrecoverableError, Worker } from 'bullmq';
 import Redis from 'ioredis';
 import { loadConfig } from './config';
 import { DocumentPipeline } from './document-pipeline';
+import { createDeadlineMaintenance } from './deadline-maintenance';
 import { DocumentProcessingStateService } from './document-state';
 import { WorkerHealthServer } from './health-server';
 import { InboxWatcher } from './inbox-watcher';
@@ -116,6 +117,7 @@ async function bootstrap(): Promise<void> {
 
   await Promise.all([prisma.$connect(), redis.ping(), storage.assertBucketAvailable()]);
   await Promise.all([queue.waitUntilReady(), worker.waitUntilReady()]);
+  const deadlineMaintenance = await createDeadlineMaintenance(prisma, redis, config, logger);
   outbox.start();
   if (config.DOCUMENT_WATCHER_ENABLED) await inbox.start();
   else logger.warn('Watcher da inbox desabilitado explicitamente.', { stage: 'inbox' });
@@ -136,7 +138,14 @@ async function bootstrap(): Promise<void> {
     shuttingDown = true;
     logger.info('Encerrando worker documental.', { signal });
     outbox.stop();
-    await Promise.allSettled([inbox.stop(), worker.close(), queue.close(), health.stop()]);
+    await Promise.allSettled([
+      inbox.stop(),
+      worker.close(),
+      queue.close(),
+      deadlineMaintenance.worker.close(),
+      deadlineMaintenance.queue.close(),
+      health.stop(),
+    ]);
     await Promise.allSettled([redis.quit(), prisma.$disconnect()]);
   };
   process.once('SIGTERM', () => void shutdown('SIGTERM'));

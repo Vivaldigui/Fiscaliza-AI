@@ -32,10 +32,16 @@ enum PropositionStatus {
   DRAFT
   ACTIVE
   AWAITING_RESPONSE
+  RESPONSE_RECEIVED
   PARTIALLY_RESPONDED
   RESPONDED
   ARCHIVED
   NEEDS_REVIEW
+}
+
+enum PropositionAuthorRole {
+  PRIMARY
+  COAUTHOR
 }
 
 enum ProcessingStatus {
@@ -160,6 +166,20 @@ enum AssociationMethod {
   MANUAL
 }
 
+enum AssociationCandidateStatus {
+  PENDING
+  ACCEPTED
+  REJECTED
+  SUPERSEDED
+}
+
+enum AssociationEvaluationStatus {
+  EVALUATED
+  AUTO_ASSOCIATED
+  NEEDS_REVIEW
+  MANUALLY_RESOLVED
+}
+
 enum AnalysisType {
   REQUEST_EXTRACTION
   REQUEST_RESPONSE
@@ -201,6 +221,7 @@ enum DeadlineStatus {
   OPEN
   DUE_SOON
   OVERDUE
+  RESPONSE_RECEIVED
   RESPONDED
   EXTENDED
   SUSPENDED
@@ -209,6 +230,20 @@ enum DeadlineStatus {
 enum CountingMode {
   CALENDAR_DAYS
   BUSINESS_DAYS
+}
+
+enum HolidayScope {
+  NATIONAL
+  STATE
+  MUNICIPAL
+  INSTITUTIONAL
+}
+
+enum DeadlineExtensionRequestStatus {
+  RECEIVED
+  GRANTED
+  REJECTED
+  WITHDRAWN
 }
 
 enum ConversationChannel {
@@ -261,40 +296,44 @@ enum OutboxStatus {
 }
 
 model User {
-  id                    String               @id @default(uuid()) @db.Uuid
-  email                 String               @unique @db.VarChar(320)
-  name                  String               @db.VarChar(200)
-  passwordHash          String               @map("password_hash") @db.VarChar(255)
-  status                UserStatus           @default(INVITED)
-  tokenVersion          Int                  @default(0) @map("token_version")
-  lastLoginAt           DateTime?            @map("last_login_at") @db.Timestamptz(3)
-  createdAt             DateTime             @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt             DateTime             @updatedAt @map("updated_at") @db.Timestamptz(3)
-  councilor             Councilor?
-  roles                 UserRole[]
-  refreshSessions       RefreshSession[]
-  associations          Response[]           @relation("ResponseAssociatedBy")
-  analysisReviews       AnalysisItem[]        @relation("AnalysisItemReviewedBy")
-  analysisRevisions     AnalysisRevision[]
-  deadlineExtensions    DeadlineExtension[]
-  deadlineSuspensions   DeadlineSuspension[]
-  conversations         Conversation[]
-  notifications         Notification[]
-  auditLogs             AuditLog[]
-  settingsUpdated       SystemSetting[]
-  uploadedDocuments     Document[]             @relation("DocumentUploadedBy")
-  documentAttempts      DocumentProcessingAttempt[] @relation("DocumentAttemptRequestedBy")
+  id                          String                        @id @default(uuid()) @db.Uuid
+  email                       String                        @unique @db.VarChar(320)
+  name                        String                        @db.VarChar(200)
+  passwordHash                String                        @map("password_hash") @db.VarChar(255)
+  status                      UserStatus                    @default(INVITED)
+  tokenVersion                Int                           @default(0) @map("token_version")
+  lastLoginAt                 DateTime?                     @map("last_login_at") @db.Timestamptz(3)
+  createdAt                   DateTime                      @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt                   DateTime                      @updatedAt @map("updated_at") @db.Timestamptz(3)
+  councilor                   Councilor?
+  roles                       UserRole[]
+  refreshSessions             RefreshSession[]
+  associations                Response[]                    @relation("ResponseAssociatedBy")
+  associationRevisions        ResponseAssociationRevision[] @relation("ResponseAssociationChangedBy")
+  analysisReviews             AnalysisItem[]                @relation("AnalysisItemReviewedBy")
+  analysisRevisions           AnalysisRevision[]
+  deadlineExtensions          DeadlineExtension[]
+  deadlineSuspensions         DeadlineSuspension[]
+  resumedSuspensions          DeadlineSuspension[]          @relation("DeadlineSuspensionResumedBy")
+  extensionRequestsRegistered DeadlineExtensionRequest[]    @relation("ExtensionRequestRegisteredBy")
+  extensionRequestsDecided    DeadlineExtensionRequest[]    @relation("ExtensionRequestDecidedBy")
+  conversations               Conversation[]
+  notifications               Notification[]
+  auditLogs                   AuditLog[]
+  settingsUpdated             SystemSetting[]
+  uploadedDocuments           Document[]                    @relation("DocumentUploadedBy")
+  documentAttempts            DocumentProcessingAttempt[]   @relation("DocumentAttemptRequestedBy")
 
   @@index([status])
   @@map("users")
 }
 
 model Role {
-  id          String    @id @default(uuid()) @db.Uuid
-  code        RoleCode  @unique
-  name        String    @db.VarChar(100)
-  description String?   @db.VarChar(500)
-  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  id          String     @id @default(uuid()) @db.Uuid
+  code        RoleCode   @unique
+  name        String     @db.VarChar(100)
+  description String?    @db.VarChar(500)
+  createdAt   DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
   users       UserRole[]
 
   @@map("roles")
@@ -313,51 +352,51 @@ model UserRole {
 }
 
 model RefreshSession {
-  id            String    @id @default(uuid()) @db.Uuid
-  userId        String    @map("user_id") @db.Uuid
-  tokenHash     String    @unique @map("token_hash") @db.VarChar(64)
-  userAgent     String?   @map("user_agent") @db.VarChar(500)
-  ipAddress     String?   @map("ip_address") @db.VarChar(64)
-  expiresAt     DateTime  @map("expires_at") @db.Timestamptz(3)
-  lastUsedAt    DateTime? @map("last_used_at") @db.Timestamptz(3)
-  revokedAt     DateTime? @map("revoked_at") @db.Timestamptz(3)
-  replacedById  String?   @map("replaced_by_id") @db.Uuid
-  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
-  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id           String    @id @default(uuid()) @db.Uuid
+  userId       String    @map("user_id") @db.Uuid
+  tokenHash    String    @unique @map("token_hash") @db.VarChar(64)
+  userAgent    String?   @map("user_agent") @db.VarChar(500)
+  ipAddress    String?   @map("ip_address") @db.VarChar(64)
+  expiresAt    DateTime  @map("expires_at") @db.Timestamptz(3)
+  lastUsedAt   DateTime? @map("last_used_at") @db.Timestamptz(3)
+  revokedAt    DateTime? @map("revoked_at") @db.Timestamptz(3)
+  replacedById String?   @map("replaced_by_id") @db.Uuid
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId, expiresAt])
   @@map("refresh_sessions")
 }
 
 model Councilor {
-  id                 String             @id @default(uuid()) @db.Uuid
-  userId             String?            @unique @map("user_id") @db.Uuid
-  displayName        String             @map("display_name") @db.VarChar(200)
-  legalName          String?            @map("legal_name") @db.VarChar(200)
-  party              String?            @db.VarChar(50)
-  termStart          DateTime?          @map("term_start") @db.Date
-  termEnd            DateTime?          @map("term_end") @db.Date
-  active             Boolean            @default(true)
-  createdAt          DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt          DateTime           @updatedAt @map("updated_at") @db.Timestamptz(3)
-  user               User?              @relation(fields: [userId], references: [id], onDelete: SetNull)
-  whatsappIdentities WhatsappIdentity[]
-  propositions       Proposition[]
+  id                     String              @id @default(uuid()) @db.Uuid
+  userId                 String?             @unique @map("user_id") @db.Uuid
+  displayName            String              @map("display_name") @db.VarChar(200)
+  legalName              String?             @map("legal_name") @db.VarChar(200)
+  party                  String?             @db.VarChar(50)
+  termStart              DateTime?           @map("term_start") @db.Date
+  termEnd                DateTime?           @map("term_end") @db.Date
+  active                 Boolean             @default(true)
+  createdAt              DateTime            @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt              DateTime            @updatedAt @map("updated_at") @db.Timestamptz(3)
+  user                   User?               @relation(fields: [userId], references: [id], onDelete: SetNull)
+  whatsappIdentities     WhatsappIdentity[]
+  propositionAuthorships PropositionAuthor[]
 
   @@index([active, displayName])
   @@map("councilors")
 }
 
 model WhatsappIdentity {
-  id           String    @id @default(uuid()) @db.Uuid
-  councilorId  String    @map("councilor_id") @db.Uuid
-  phoneNumber  String    @map("phone_number") @db.VarChar(20)
-  instance     String    @db.VarChar(100)
-  verifiedAt   DateTime? @map("verified_at") @db.Timestamptz(3)
-  active       Boolean   @default(true)
-  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt    DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
-  councilor    Councilor @relation(fields: [councilorId], references: [id], onDelete: Cascade)
+  id          String    @id @default(uuid()) @db.Uuid
+  councilorId String    @map("councilor_id") @db.Uuid
+  phoneNumber String    @map("phone_number") @db.VarChar(20)
+  instance    String    @db.VarChar(100)
+  verifiedAt  DateTime? @map("verified_at") @db.Timestamptz(3)
+  active      Boolean   @default(true)
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+  councilor   Councilor @relation(fields: [councilorId], references: [id], onDelete: Cascade)
 
   @@unique([phoneNumber, instance])
   @@index([councilorId, active])
@@ -365,49 +404,66 @@ model WhatsappIdentity {
 }
 
 model Proposition {
-  id                   String                @id @default(uuid()) @db.Uuid
-  type                 PropositionType
-  number               Int
-  year                 Int
-  protocolNumber       String?               @map("protocol_number") @db.VarChar(100)
-  protocolDate         DateTime?             @map("protocol_date") @db.Date
-  authorId             String                @map("author_id") @db.Uuid
-  recipient            String?               @db.VarChar(300)
-  subject              String                @db.VarChar(500)
-  summary              String?               @db.Text
-  status               PropositionStatus     @default(ACTIVE)
-  createdAt            DateTime              @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt            DateTime              @updatedAt @map("updated_at") @db.Timestamptz(3)
-  author               Councilor             @relation(fields: [authorId], references: [id], onDelete: Restrict)
-  requestedItems       RequestedItem[]
-  documents            PropositionDocument[]
-  responses            Response[]
-  analyses             Analysis[]
-  deadline             Deadline?
-  conversations        Conversation[]
-  associationCandidates AssociationCandidate[]
+  id                           String                        @id @default(uuid()) @db.Uuid
+  type                         PropositionType
+  number                       Int
+  year                         Int
+  protocolNumber               String?                       @map("protocol_number") @db.VarChar(100)
+  protocolDate                 DateTime?                     @map("protocol_date") @db.Date
+  recipient                    String?                       @db.VarChar(300)
+  subject                      String                        @db.VarChar(500)
+  summary                      String?                       @db.Text
+  status                       PropositionStatus             @default(ACTIVE)
+  createdAt                    DateTime                      @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt                    DateTime                      @updatedAt @map("updated_at") @db.Timestamptz(3)
+  authors                      PropositionAuthor[]
+  requestedItems               RequestedItem[]
+  documents                    PropositionDocument[]
+  responses                    Response[]
+  analyses                     Analysis[]
+  deadline                     Deadline?
+  conversations                Conversation[]
+  associationCandidates        AssociationCandidate[]
+  previousAssociationRevisions ResponseAssociationRevision[] @relation("PreviousAssociationProposition")
+  newAssociationRevisions      ResponseAssociationRevision[] @relation("NewAssociationProposition")
+  extensionRequests            DeadlineExtensionRequest[]
 
   @@unique([type, number, year])
-  @@index([authorId, year, type])
+  @@index([year, type])
   @@index([status, protocolDate])
+  @@index([subject])
   @@index([protocolNumber])
   @@map("propositions")
 }
 
+model PropositionAuthor {
+  propositionId String                @map("proposition_id") @db.Uuid
+  councilorId   String                @map("councilor_id") @db.Uuid
+  role          PropositionAuthorRole @default(COAUTHOR)
+  createdAt     DateTime              @default(now()) @map("created_at") @db.Timestamptz(3)
+  proposition   Proposition           @relation(fields: [propositionId], references: [id], onDelete: Cascade)
+  councilor     Councilor             @relation(fields: [councilorId], references: [id], onDelete: Restrict)
+
+  @@id([propositionId, councilorId])
+  @@index([councilorId, propositionId])
+  @@index([propositionId, role])
+  @@map("proposition_authors")
+}
+
 model RequestedItem {
-  id                 String             @id @default(uuid()) @db.Uuid
-  propositionId      String             @map("proposition_id") @db.Uuid
-  sequence           Int
-  originalText       String             @map("original_text") @db.Text
-  normalizedQuestion String             @map("normalized_question") @db.Text
-  category           String?            @db.VarChar(100)
-  expectedAnswerType ExpectedAnswerType @default(UNKNOWN) @map("expected_answer_type")
-  sourcePage         Int?               @map("source_page")
-  extractionConfidence Decimal?         @map("extraction_confidence") @db.Decimal(4, 3)
-  createdAt          DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt          DateTime           @updatedAt @map("updated_at") @db.Timestamptz(3)
-  proposition        Proposition        @relation(fields: [propositionId], references: [id], onDelete: Cascade)
-  analysisItems      AnalysisItem[]
+  id                   String             @id @default(uuid()) @db.Uuid
+  propositionId        String             @map("proposition_id") @db.Uuid
+  sequence             Int
+  originalText         String             @map("original_text") @db.Text
+  normalizedQuestion   String             @map("normalized_question") @db.Text
+  category             String?            @db.VarChar(100)
+  expectedAnswerType   ExpectedAnswerType @default(UNKNOWN) @map("expected_answer_type")
+  sourcePage           Int?               @map("source_page")
+  extractionConfidence Decimal?           @map("extraction_confidence") @db.Decimal(4, 3)
+  createdAt            DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt            DateTime           @updatedAt @map("updated_at") @db.Timestamptz(3)
+  proposition          Proposition        @relation(fields: [propositionId], references: [id], onDelete: Cascade)
+  analysisItems        AnalysisItem[]
 
   @@unique([propositionId, sequence])
   @@index([propositionId, category])
@@ -415,43 +471,44 @@ model RequestedItem {
 }
 
 model Document {
-  id                   String                  @id @default(uuid()) @db.Uuid
-  originalName         String                  @map("original_name") @db.VarChar(500)
-  mimeType             String                  @map("mime_type") @db.VarChar(150)
-  storageKey           String                  @unique @map("storage_key") @db.VarChar(1024)
-  sha256               String                  @unique @db.Char(64)
-  sizeBytes            BigInt                  @map("size_bytes")
-  pageCount            Int?                    @map("page_count")
-  kind                 DocumentKind            @default(UNKNOWN)
-  accessLevel          AccessLevel             @default(INTERNAL) @map("access_level")
-  ingestionSource      DocumentIngestionSource @default(UPLOAD) @map("ingestion_source")
-  uploadedById         String?                 @map("uploaded_by_id") @db.Uuid
-  processingStatus     ProcessingStatus        @default(RECEIVED) @map("processing_status")
-  securityStatus       DocumentSecurityStatus  @default(PENDING) @map("security_status")
-  textExtractionStatus TextExtractionStatus    @default(PENDING) @map("text_extraction_status")
-  ocrStatus            OcrStatus               @default(NOT_REQUIRED) @map("ocr_status")
-  extractedText        String?                 @map("extracted_text") @db.Text
-  ocrText              String?                 @map("ocr_text") @db.Text
-  extractionConfidence Decimal?                @map("extraction_confidence") @db.Decimal(4, 3)
-  processingError      String?                 @map("processing_error") @db.Text
-  lastErrorCode        String?                 @map("last_error_code") @db.VarChar(100)
-  lastErrorAt          DateTime?               @map("last_error_at") @db.Timestamptz(3)
-  processingAttempt    Int                     @default(0) @map("processing_attempt")
-  reviewRequired       Boolean                 @default(false) @map("review_required")
-  quarantinedAt        DateTime?               @map("quarantined_at") @db.Timestamptz(3)
-  securityScannedAt    DateTime?               @map("security_scanned_at") @db.Timestamptz(3)
-  processingStartedAt  DateTime?               @map("processing_started_at") @db.Timestamptz(3)
-  processingCompletedAt DateTime?              @map("processing_completed_at") @db.Timestamptz(3)
-  createdAt            DateTime                @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt            DateTime                @updatedAt @map("updated_at") @db.Timestamptz(3)
-  pages                DocumentPage[]
-  chunks               DocumentChunk[]
-  propositionLinks     PropositionDocument[]
-  responseLinks        ResponseDocument[]
-  responseExtensions   ResponseExtension[]
-  analysisInputs       AnalysisDocument[]
-  uploadedBy           User?                   @relation("DocumentUploadedBy", fields: [uploadedById], references: [id], onDelete: SetNull)
-  processingAttempts   DocumentProcessingAttempt[]
+  id                        String                      @id @default(uuid()) @db.Uuid
+  originalName              String                      @map("original_name") @db.VarChar(500)
+  mimeType                  String                      @map("mime_type") @db.VarChar(150)
+  storageKey                String                      @unique @map("storage_key") @db.VarChar(1024)
+  sha256                    String                      @unique @db.Char(64)
+  sizeBytes                 BigInt                      @map("size_bytes")
+  pageCount                 Int?                        @map("page_count")
+  kind                      DocumentKind                @default(UNKNOWN)
+  accessLevel               AccessLevel                 @default(INTERNAL) @map("access_level")
+  ingestionSource           DocumentIngestionSource     @default(UPLOAD) @map("ingestion_source")
+  uploadedById              String?                     @map("uploaded_by_id") @db.Uuid
+  processingStatus          ProcessingStatus            @default(RECEIVED) @map("processing_status")
+  securityStatus            DocumentSecurityStatus      @default(PENDING) @map("security_status")
+  textExtractionStatus      TextExtractionStatus        @default(PENDING) @map("text_extraction_status")
+  ocrStatus                 OcrStatus                   @default(NOT_REQUIRED) @map("ocr_status")
+  extractedText             String?                     @map("extracted_text") @db.Text
+  ocrText                   String?                     @map("ocr_text") @db.Text
+  extractionConfidence      Decimal?                    @map("extraction_confidence") @db.Decimal(4, 3)
+  processingError           String?                     @map("processing_error") @db.Text
+  lastErrorCode             String?                     @map("last_error_code") @db.VarChar(100)
+  lastErrorAt               DateTime?                   @map("last_error_at") @db.Timestamptz(3)
+  processingAttempt         Int                         @default(0) @map("processing_attempt")
+  reviewRequired            Boolean                     @default(false) @map("review_required")
+  quarantinedAt             DateTime?                   @map("quarantined_at") @db.Timestamptz(3)
+  securityScannedAt         DateTime?                   @map("security_scanned_at") @db.Timestamptz(3)
+  processingStartedAt       DateTime?                   @map("processing_started_at") @db.Timestamptz(3)
+  processingCompletedAt     DateTime?                   @map("processing_completed_at") @db.Timestamptz(3)
+  createdAt                 DateTime                    @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt                 DateTime                    @updatedAt @map("updated_at") @db.Timestamptz(3)
+  pages                     DocumentPage[]
+  chunks                    DocumentChunk[]
+  propositionLinks          PropositionDocument[]
+  responseLinks             ResponseDocument[]
+  legacyResponseExtensions  LegacyResponseExtension[]
+  deadlineExtensionRequests DeadlineExtensionRequest[]
+  analysisInputs            AnalysisDocument[]
+  uploadedBy                User?                       @relation("DocumentUploadedBy", fields: [uploadedById], references: [id], onDelete: SetNull)
+  processingAttempts        DocumentProcessingAttempt[]
 
   @@index([processingStatus, createdAt])
   @@index([securityStatus, createdAt])
@@ -462,46 +519,52 @@ model Document {
 }
 
 model DocumentPage {
-  id                   String      @id @default(uuid()) @db.Uuid
-  documentId           String      @map("document_id") @db.Uuid
-  pageNumber           Int         @map("page_number")
-  extractedText        String?     @map("extracted_text") @db.Text
-  ocrText              String?     @map("ocr_text") @db.Text
-  effectiveText        String      @default("") @map("effective_text") @db.Text
-  extractionConfidence Decimal?    @map("extraction_confidence") @db.Decimal(4, 3)
-  qualityScore          Decimal?    @map("quality_score") @db.Decimal(4, 3)
-  characterCount        Int         @default(0) @map("character_count")
-  requiresOcr           Boolean     @default(false) @map("requires_ocr")
-  qualityReason         String?     @map("quality_reason") @db.VarChar(500)
-  ocrStatus             OcrStatus   @default(NOT_REQUIRED) @map("ocr_status")
-  ocrConfidence         Decimal?    @map("ocr_confidence") @db.Decimal(4, 3)
-  effectiveTextSource   DocumentTextSource @default(EMPTY) @map("effective_text_source")
-  createdAt            DateTime    @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt            DateTime    @updatedAt @map("updated_at") @db.Timestamptz(3)
-  document             Document    @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  id                   String                    @id @default(uuid()) @db.Uuid
+  documentId           String                    @map("document_id") @db.Uuid
+  processingAttemptId  String                    @map("processing_attempt_id") @db.Uuid
+  pageNumber           Int                       @map("page_number")
+  extractedText        String?                   @map("extracted_text") @db.Text
+  ocrText              String?                   @map("ocr_text") @db.Text
+  effectiveText        String                    @default("") @map("effective_text") @db.Text
+  extractionConfidence Decimal?                  @map("extraction_confidence") @db.Decimal(4, 3)
+  qualityScore         Decimal?                  @map("quality_score") @db.Decimal(4, 3)
+  characterCount       Int                       @default(0) @map("character_count")
+  requiresOcr          Boolean                   @default(false) @map("requires_ocr")
+  qualityReason        String?                   @map("quality_reason") @db.VarChar(500)
+  ocrStatus            OcrStatus                 @default(NOT_REQUIRED) @map("ocr_status")
+  ocrConfidence        Decimal?                  @map("ocr_confidence") @db.Decimal(4, 3)
+  effectiveTextSource  DocumentTextSource        @default(EMPTY) @map("effective_text_source")
+  createdAt            DateTime                  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt            DateTime                  @updatedAt @map("updated_at") @db.Timestamptz(3)
+  document             Document                  @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  processingAttempt    DocumentProcessingAttempt @relation(fields: [processingAttemptId], references: [id], onDelete: Restrict)
   chunks               DocumentChunk[]
-  evidences             Evidence[]
+  evidences            Evidence[]
 
-  @@unique([documentId, pageNumber])
+  @@unique([processingAttemptId, pageNumber])
   @@index([documentId, pageNumber])
+  @@index([documentId, processingAttemptId, pageNumber])
   @@map("document_pages")
 }
 
 model DocumentProcessingAttempt {
-  id            String                    @id @default(uuid()) @db.Uuid
-  documentId    String                    @map("document_id") @db.Uuid
-  attempt       Int
-  trigger       DocumentProcessingTrigger
-  status        DocumentAttemptStatus     @default(QUEUED)
-  requestedById String?                   @map("requested_by_id") @db.Uuid
-  errorCode     String?                   @map("error_code") @db.VarChar(100)
-  errorMessage  String?                   @map("error_message") @db.Text
-  startedAt     DateTime?                 @map("started_at") @db.Timestamptz(3)
-  finishedAt    DateTime?                 @map("finished_at") @db.Timestamptz(3)
-  createdAt     DateTime                  @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt     DateTime                  @updatedAt @map("updated_at") @db.Timestamptz(3)
-  document      Document                  @relation(fields: [documentId], references: [id], onDelete: Cascade)
-  requestedBy   User?                     @relation("DocumentAttemptRequestedBy", fields: [requestedById], references: [id], onDelete: SetNull)
+  id             String                    @id @default(uuid()) @db.Uuid
+  documentId     String                    @map("document_id") @db.Uuid
+  attempt        Int
+  trigger        DocumentProcessingTrigger
+  status         DocumentAttemptStatus     @default(QUEUED)
+  requestedById  String?                   @map("requested_by_id") @db.Uuid
+  errorCode      String?                   @map("error_code") @db.VarChar(100)
+  errorMessage   String?                   @map("error_message") @db.Text
+  startedAt      DateTime?                 @map("started_at") @db.Timestamptz(3)
+  finishedAt     DateTime?                 @map("finished_at") @db.Timestamptz(3)
+  createdAt      DateTime                  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt      DateTime                  @updatedAt @map("updated_at") @db.Timestamptz(3)
+  document       Document                  @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  requestedBy    User?                     @relation("DocumentAttemptRequestedBy", fields: [requestedById], references: [id], onDelete: SetNull)
+  pages          DocumentPage[]
+  chunks         DocumentChunk[]
+  analysisInputs AnalysisDocument[]
 
   @@unique([documentId, attempt])
   @@index([status, createdAt])
@@ -510,20 +573,23 @@ model DocumentProcessingAttempt {
 }
 
 model DocumentChunk {
-  id          String                    @id @default(uuid()) @db.Uuid
-  documentId  String                    @map("document_id") @db.Uuid
-  pageId      String                    @map("page_id") @db.Uuid
-  pageNumber  Int                       @map("page_number")
-  sequence    Int
-  content     String                    @db.Text
-  contentHash String                    @map("content_hash") @db.Char(64)
-  embedding   Unsupported("vector(1536)")?
-  createdAt   DateTime                  @default(now()) @map("created_at") @db.Timestamptz(3)
-  document    Document                  @relation(fields: [documentId], references: [id], onDelete: Cascade)
-  page        DocumentPage              @relation(fields: [pageId], references: [id], onDelete: Cascade)
+  id                  String                       @id @default(uuid()) @db.Uuid
+  documentId          String                       @map("document_id") @db.Uuid
+  processingAttemptId String                       @map("processing_attempt_id") @db.Uuid
+  pageId              String                       @map("page_id") @db.Uuid
+  pageNumber          Int                          @map("page_number")
+  sequence            Int
+  content             String                       @db.Text
+  contentHash         String                       @map("content_hash") @db.Char(64)
+  embedding           Unsupported("vector(1536)")?
+  createdAt           DateTime                     @default(now()) @map("created_at") @db.Timestamptz(3)
+  document            Document                     @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  processingAttempt   DocumentProcessingAttempt    @relation(fields: [processingAttemptId], references: [id], onDelete: Restrict)
+  page                DocumentPage                 @relation(fields: [pageId], references: [id], onDelete: Cascade)
 
-  @@unique([documentId, pageNumber, sequence])
+  @@unique([processingAttemptId, pageNumber, sequence])
   @@index([documentId, pageNumber])
+  @@index([documentId, processingAttemptId, pageNumber])
   @@map("document_chunks")
 }
 
@@ -542,26 +608,29 @@ model PropositionDocument {
 }
 
 model Response {
-  id                    String                 @id @default(uuid()) @db.Uuid
-  propositionId         String?                @map("proposition_id") @db.Uuid
-  type                  ResponseType           @default(INITIAL)
-  protocolNumber        String?                @map("protocol_number") @db.VarChar(100)
-  protocolDate          DateTime?              @map("protocol_date") @db.Date
-  sender                String?                @db.VarChar(300)
-  subject               String?                @db.VarChar(500)
-  status                ResponseStatus         @default(INGESTED)
-  associationMethod     AssociationMethod?     @map("association_method")
-  associationConfidence Decimal?               @map("association_confidence") @db.Decimal(4, 3)
-  associatedById        String?                @map("associated_by_id") @db.Uuid
-  associatedAt          DateTime?              @map("associated_at") @db.Timestamptz(3)
-  createdAt             DateTime               @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt             DateTime               @updatedAt @map("updated_at") @db.Timestamptz(3)
-  proposition           Proposition?           @relation(fields: [propositionId], references: [id], onDelete: SetNull)
-  associatedBy          User?                  @relation("ResponseAssociatedBy", fields: [associatedById], references: [id], onDelete: SetNull)
-  documents             ResponseDocument[]
-  extensions            ResponseExtension[]
-  analyses              Analysis[]
-  associationCandidates AssociationCandidate[]
+  id                     String                        @id @default(uuid()) @db.Uuid
+  propositionId          String?                       @map("proposition_id") @db.Uuid
+  type                   ResponseType                  @default(INITIAL)
+  protocolNumber         String?                       @map("protocol_number") @db.VarChar(100)
+  protocolDate           DateTime?                     @map("protocol_date") @db.Date
+  sender                 String?                       @db.VarChar(300)
+  subject                String?                       @db.VarChar(500)
+  status                 ResponseStatus                @default(INGESTED)
+  associationMethod      AssociationMethod?            @map("association_method")
+  associationConfidence  Decimal?                      @map("association_confidence") @db.Decimal(4, 3)
+  associatedById         String?                       @map("associated_by_id") @db.Uuid
+  associatedAt           DateTime?                     @map("associated_at") @db.Timestamptz(3)
+  associationVersion     Int                           @default(0) @map("association_version")
+  createdAt              DateTime                      @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt              DateTime                      @updatedAt @map("updated_at") @db.Timestamptz(3)
+  proposition            Proposition?                  @relation(fields: [propositionId], references: [id], onDelete: SetNull)
+  associatedBy           User?                         @relation("ResponseAssociatedBy", fields: [associatedById], references: [id], onDelete: SetNull)
+  documents              ResponseDocument[]
+  legacyExtensionRecords LegacyResponseExtension[]
+  analyses               Analysis[]
+  associationCandidates  AssociationCandidate[]
+  associationEvaluations AssociationEvaluation[]
+  associationRevisions   ResponseAssociationRevision[]
 
   @@index([propositionId, protocolDate])
   @@index([status, createdAt])
@@ -583,35 +652,77 @@ model ResponseDocument {
   @@map("response_documents")
 }
 
-model ResponseExtension {
+/// Registro legado da estrutura inicial. Não deve ser usado para novas prorrogações.
+model LegacyResponseExtension {
   id               String    @id @default(uuid()) @db.Uuid
   responseId       String    @map("response_id") @db.Uuid
   documentId       String?   @map("document_id") @db.Uuid
   requestedAt      DateTime  @map("requested_at") @db.Date
   requestedDueDate DateTime? @map("requested_due_date") @db.Date
-  reason            String?   @db.Text
-  createdAt         DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
-  response          Response  @relation(fields: [responseId], references: [id], onDelete: Cascade)
-  document          Document? @relation(fields: [documentId], references: [id], onDelete: SetNull)
+  reason           String?   @db.Text
+  createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  response         Response  @relation(fields: [responseId], references: [id], onDelete: Cascade)
+  document         Document? @relation(fields: [documentId], references: [id], onDelete: SetNull)
 
   @@index([responseId, requestedAt])
-  @@map("response_extensions")
+  @@map("legacy_response_extensions")
+}
+
+model AssociationEvaluation {
+  id                    String                      @id @default(uuid()) @db.Uuid
+  responseId            String                      @map("response_id") @db.Uuid
+  status                AssociationEvaluationStatus @default(EVALUATED)
+  topScore              Decimal?                    @map("top_score") @db.Decimal(4, 3)
+  secondScore           Decimal?                    @map("second_score") @db.Decimal(4, 3)
+  margin                Decimal?                    @db.Decimal(4, 3)
+  configurationSnapshot Json                        @map("configuration_snapshot")
+  createdAt             DateTime                    @default(now()) @map("created_at") @db.Timestamptz(3)
+  response              Response                    @relation(fields: [responseId], references: [id], onDelete: Cascade)
+  candidates            AssociationCandidate[]
+
+  @@index([responseId, createdAt])
+  @@index([status, createdAt])
+  @@map("association_evaluations")
 }
 
 model AssociationCandidate {
-  id            String      @id @default(uuid()) @db.Uuid
-  responseId    String      @map("response_id") @db.Uuid
-  propositionId String      @map("proposition_id") @db.Uuid
-  score         Decimal     @db.Decimal(4, 3)
-  signalScores  Json        @map("signal_scores")
+  id            String                     @id @default(uuid()) @db.Uuid
+  evaluationId  String                     @map("evaluation_id") @db.Uuid
+  responseId    String                     @map("response_id") @db.Uuid
+  propositionId String                     @map("proposition_id") @db.Uuid
+  score         Decimal                    @db.Decimal(4, 3)
+  signalScores  Json                       @map("signal_scores")
   rank          Int
-  createdAt     DateTime    @default(now()) @map("created_at") @db.Timestamptz(3)
-  response      Response    @relation(fields: [responseId], references: [id], onDelete: Cascade)
-  proposition   Proposition @relation(fields: [propositionId], references: [id], onDelete: Cascade)
+  status        AssociationCandidateStatus @default(PENDING)
+  createdAt     DateTime                   @default(now()) @map("created_at") @db.Timestamptz(3)
+  evaluation    AssociationEvaluation      @relation(fields: [evaluationId], references: [id], onDelete: Cascade)
+  response      Response                   @relation(fields: [responseId], references: [id], onDelete: Cascade)
+  proposition   Proposition                @relation(fields: [propositionId], references: [id], onDelete: Cascade)
 
-  @@unique([responseId, propositionId])
+  @@unique([evaluationId, propositionId])
   @@index([responseId, rank])
+  @@index([propositionId, status])
   @@map("association_candidates")
+}
+
+model ResponseAssociationRevision {
+  id                    String             @id @default(uuid()) @db.Uuid
+  responseId            String             @map("response_id") @db.Uuid
+  previousPropositionId String?            @map("previous_proposition_id") @db.Uuid
+  newPropositionId      String?            @map("new_proposition_id") @db.Uuid
+  previousMethod        AssociationMethod? @map("previous_method")
+  newMethod             AssociationMethod? @map("new_method")
+  changedById           String?            @map("changed_by_id") @db.Uuid
+  reason                String?            @db.Text
+  createdAt             DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
+  response              Response           @relation(fields: [responseId], references: [id], onDelete: Cascade)
+  previousProposition   Proposition?       @relation("PreviousAssociationProposition", fields: [previousPropositionId], references: [id], onDelete: SetNull)
+  newProposition        Proposition?       @relation("NewAssociationProposition", fields: [newPropositionId], references: [id], onDelete: SetNull)
+  changedBy             User?              @relation("ResponseAssociationChangedBy", fields: [changedById], references: [id], onDelete: SetNull)
+
+  @@index([responseId, createdAt])
+  @@index([changedById, createdAt])
+  @@map("response_association_revisions")
 }
 
 model Analysis {
@@ -637,7 +748,7 @@ model Analysis {
   proposition      Proposition        @relation(fields: [propositionId], references: [id], onDelete: Cascade)
   response         Response?          @relation(fields: [responseId], references: [id], onDelete: SetNull)
   items            AnalysisItem[]
-  evidences         Evidence[]
+  evidences        Evidence[]
   inputDocuments   AnalysisDocument[]
   aiUsage          AIUsage[]
 
@@ -648,36 +759,39 @@ model Analysis {
 }
 
 model AnalysisDocument {
-  analysisId String   @map("analysis_id") @db.Uuid
-  documentId String   @map("document_id") @db.Uuid
-  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
-  analysis   Analysis @relation(fields: [analysisId], references: [id], onDelete: Cascade)
-  document   Document @relation(fields: [documentId], references: [id], onDelete: Restrict)
+  analysisId          String                    @map("analysis_id") @db.Uuid
+  documentId          String                    @map("document_id") @db.Uuid
+  processingAttemptId String                    @map("processing_attempt_id") @db.Uuid
+  createdAt           DateTime                  @default(now()) @map("created_at") @db.Timestamptz(3)
+  analysis            Analysis                  @relation(fields: [analysisId], references: [id], onDelete: Cascade)
+  document            Document                  @relation(fields: [documentId], references: [id], onDelete: Restrict)
+  processingAttempt   DocumentProcessingAttempt @relation(fields: [processingAttemptId], references: [id], onDelete: Restrict)
 
   @@id([analysisId, documentId])
   @@index([documentId])
+  @@index([processingAttemptId])
   @@map("analysis_documents")
 }
 
 model AnalysisItem {
-  id               String             @id @default(uuid()) @db.Uuid
-  analysisId       String             @map("analysis_id") @db.Uuid
-  requestedItemId  String?            @map("requested_item_id") @db.Uuid
-  originalStatus   AnalysisItemStatus @map("original_status")
-  currentStatus    AnalysisItemStatus @map("current_status")
-  originalExplanation String          @map("original_explanation") @db.Text
-  currentExplanation  String          @map("current_explanation") @db.Text
-  confidence       Decimal            @db.Decimal(4, 3)
-  reviewedById     String?            @map("reviewed_by_id") @db.Uuid
-  reviewedAt       DateTime?          @map("reviewed_at") @db.Timestamptz(3)
-  reviewReason     String?            @map("review_reason") @db.Text
-  createdAt        DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt        DateTime           @updatedAt @map("updated_at") @db.Timestamptz(3)
-  analysis         Analysis           @relation(fields: [analysisId], references: [id], onDelete: Cascade)
-  requestedItem    RequestedItem?     @relation(fields: [requestedItemId], references: [id], onDelete: SetNull)
-  reviewedBy       User?              @relation("AnalysisItemReviewedBy", fields: [reviewedById], references: [id], onDelete: SetNull)
-  evidences        Evidence[]
-  revisions        AnalysisRevision[]
+  id                  String             @id @default(uuid()) @db.Uuid
+  analysisId          String             @map("analysis_id") @db.Uuid
+  requestedItemId     String?            @map("requested_item_id") @db.Uuid
+  originalStatus      AnalysisItemStatus @map("original_status")
+  currentStatus       AnalysisItemStatus @map("current_status")
+  originalExplanation String             @map("original_explanation") @db.Text
+  currentExplanation  String             @map("current_explanation") @db.Text
+  confidence          Decimal            @db.Decimal(4, 3)
+  reviewedById        String?            @map("reviewed_by_id") @db.Uuid
+  reviewedAt          DateTime?          @map("reviewed_at") @db.Timestamptz(3)
+  reviewReason        String?            @map("review_reason") @db.Text
+  createdAt           DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt           DateTime           @updatedAt @map("updated_at") @db.Timestamptz(3)
+  analysis            Analysis           @relation(fields: [analysisId], references: [id], onDelete: Cascade)
+  requestedItem       RequestedItem?     @relation(fields: [requestedItemId], references: [id], onDelete: SetNull)
+  reviewedBy          User?              @relation("AnalysisItemReviewedBy", fields: [reviewedById], references: [id], onDelete: SetNull)
+  evidences           Evidence[]
+  revisions           AnalysisRevision[]
 
   @@unique([analysisId, requestedItemId])
   @@index([analysisId, currentStatus])
@@ -686,39 +800,41 @@ model AnalysisItem {
 }
 
 model Evidence {
-  id             String          @id @default(uuid()) @db.Uuid
-  analysisId     String          @map("analysis_id") @db.Uuid
-  analysisItemId String?         @map("analysis_item_id") @db.Uuid
-  documentId     String          @map("document_id") @db.Uuid
-  pageNumber     Int             @map("page_number")
-  kind           EvidenceKind    @default(TEXT)
-  excerpt        String?         @db.Text
-  reason         String          @db.Text
-  startOffset    Int?            @map("start_offset")
-  endOffset      Int?            @map("end_offset")
-  createdAt      DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
-  analysis       Analysis        @relation(fields: [analysisId], references: [id], onDelete: Cascade)
-  analysisItem   AnalysisItem?   @relation(fields: [analysisItemId], references: [id], onDelete: Cascade)
-  documentPage   DocumentPage    @relation(fields: [documentId, pageNumber], references: [documentId, pageNumber], onDelete: Restrict)
+  id             String        @id @default(uuid()) @db.Uuid
+  analysisId     String        @map("analysis_id") @db.Uuid
+  analysisItemId String?       @map("analysis_item_id") @db.Uuid
+  documentId     String        @map("document_id") @db.Uuid
+  documentPageId String        @map("document_page_id") @db.Uuid
+  pageNumber     Int           @map("page_number")
+  kind           EvidenceKind  @default(TEXT)
+  excerpt        String?       @db.Text
+  reason         String        @db.Text
+  startOffset    Int?          @map("start_offset")
+  endOffset      Int?          @map("end_offset")
+  createdAt      DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
+  analysis       Analysis      @relation(fields: [analysisId], references: [id], onDelete: Cascade)
+  analysisItem   AnalysisItem? @relation(fields: [analysisItemId], references: [id], onDelete: Cascade)
+  documentPage   DocumentPage  @relation(fields: [documentPageId], references: [id], onDelete: Restrict)
 
   @@index([analysisId])
   @@index([analysisItemId])
   @@index([documentId, pageNumber])
+  @@index([documentPageId])
   @@map("evidences")
 }
 
 model AnalysisRevision {
-  id             String             @id @default(uuid()) @db.Uuid
-  analysisItemId String             @map("analysis_item_id") @db.Uuid
-  changedById    String             @map("changed_by_id") @db.Uuid
-  previousStatus AnalysisItemStatus @map("previous_status")
-  newStatus      AnalysisItemStatus @map("new_status")
-  previousExplanation String        @map("previous_explanation") @db.Text
-  newExplanation String             @map("new_explanation") @db.Text
-  justification  String             @db.Text
-  createdAt      DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
-  analysisItem   AnalysisItem       @relation(fields: [analysisItemId], references: [id], onDelete: Cascade)
-  changedBy      User               @relation(fields: [changedById], references: [id], onDelete: Restrict)
+  id                  String             @id @default(uuid()) @db.Uuid
+  analysisItemId      String             @map("analysis_item_id") @db.Uuid
+  changedById         String             @map("changed_by_id") @db.Uuid
+  previousStatus      AnalysisItemStatus @map("previous_status")
+  newStatus           AnalysisItemStatus @map("new_status")
+  previousExplanation String             @map("previous_explanation") @db.Text
+  newExplanation      String             @map("new_explanation") @db.Text
+  justification       String             @db.Text
+  createdAt           DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
+  analysisItem        AnalysisItem       @relation(fields: [analysisItemId], references: [id], onDelete: Cascade)
+  changedBy           User               @relation(fields: [changedById], references: [id], onDelete: Restrict)
 
   @@index([analysisItemId, createdAt])
   @@index([changedById, createdAt])
@@ -750,85 +866,121 @@ model AIUsage {
 }
 
 model Deadline {
-  id                 String               @id @default(uuid()) @db.Uuid
-  propositionId      String               @unique @map("proposition_id") @db.Uuid
-  baseDate           DateTime             @map("base_date") @db.Date
-  originalDueDate    DateTime             @map("original_due_date") @db.Date
-  currentDueDate     DateTime             @map("current_due_date") @db.Date
-  status             DeadlineStatus       @default(OPEN)
-  countingMode       CountingMode         @map("counting_mode")
-  timezone           String               @db.VarChar(100)
-  configurationSnapshot Json              @map("configuration_snapshot")
-  respondedAt        DateTime?            @map("responded_at") @db.Timestamptz(3)
-  createdAt          DateTime             @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt          DateTime             @updatedAt @map("updated_at") @db.Timestamptz(3)
-  proposition        Proposition          @relation(fields: [propositionId], references: [id], onDelete: Cascade)
-  extensions         DeadlineExtension[]
-  suspensions        DeadlineSuspension[]
+  id                    String                     @id @default(uuid()) @db.Uuid
+  propositionId         String                     @unique @map("proposition_id") @db.Uuid
+  baseDate              DateTime                   @map("base_date") @db.Date
+  originalDueDate       DateTime                   @map("original_due_date") @db.Date
+  currentDueDate        DateTime                   @map("current_due_date") @db.Date
+  status                DeadlineStatus             @default(OPEN)
+  countingMode          CountingMode               @map("counting_mode")
+  timezone              String                     @db.VarChar(100)
+  configurationSnapshot Json                       @map("configuration_snapshot")
+  responseReceivedAt    DateTime?                  @map("responded_at") @db.Timestamptz(3)
+  version               Int                        @default(0)
+  createdAt             DateTime                   @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt             DateTime                   @updatedAt @map("updated_at") @db.Timestamptz(3)
+  proposition           Proposition                @relation(fields: [propositionId], references: [id], onDelete: Cascade)
+  extensions            DeadlineExtension[]
+  extensionRequests     DeadlineExtensionRequest[]
+  suspensions           DeadlineSuspension[]
 
   @@index([status, currentDueDate])
   @@map("deadlines")
 }
 
 model DeadlineExtension {
-  id              String    @id @default(uuid()) @db.Uuid
-  deadlineId      String    @map("deadline_id") @db.Uuid
-  previousDueDate DateTime  @map("previous_due_date") @db.Date
-  newDueDate      DateTime  @map("new_due_date") @db.Date
-  extensionDays   Int       @map("extension_days")
-  grantedAt       DateTime  @map("granted_at") @db.Timestamptz(3)
-  changedById     String    @map("changed_by_id") @db.Uuid
-  reason          String?   @db.Text
-  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
-  deadline        Deadline  @relation(fields: [deadlineId], references: [id], onDelete: Cascade)
-  changedBy       User      @relation(fields: [changedById], references: [id], onDelete: Restrict)
+  id              String                    @id @default(uuid()) @db.Uuid
+  deadlineId      String                    @map("deadline_id") @db.Uuid
+  previousDueDate DateTime                  @map("previous_due_date") @db.Date
+  newDueDate      DateTime                  @map("new_due_date") @db.Date
+  extensionDays   Int                       @map("extension_days")
+  grantedAt       DateTime                  @map("granted_at") @db.Timestamptz(3)
+  changedById     String                    @map("changed_by_id") @db.Uuid
+  reason          String?                   @db.Text
+  requestId       String?                   @unique @map("request_id") @db.Uuid
+  createdAt       DateTime                  @default(now()) @map("created_at") @db.Timestamptz(3)
+  deadline        Deadline                  @relation(fields: [deadlineId], references: [id], onDelete: Cascade)
+  changedBy       User                      @relation(fields: [changedById], references: [id], onDelete: Restrict)
+  request         DeadlineExtensionRequest? @relation(fields: [requestId], references: [id], onDelete: SetNull)
 
   @@index([deadlineId, grantedAt])
   @@map("deadline_extensions")
 }
 
 model DeadlineSuspension {
-  id          String    @id @default(uuid()) @db.Uuid
-  deadlineId  String    @map("deadline_id") @db.Uuid
-  startedAt   DateTime  @map("started_at") @db.Timestamptz(3)
-  endedAt     DateTime? @map("ended_at") @db.Timestamptz(3)
-  changedById String    @map("changed_by_id") @db.Uuid
-  reason      String    @db.Text
-  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
-  deadline    Deadline  @relation(fields: [deadlineId], references: [id], onDelete: Cascade)
-  changedBy   User      @relation(fields: [changedById], references: [id], onDelete: Restrict)
+  id              String    @id @default(uuid()) @db.Uuid
+  deadlineId      String    @map("deadline_id") @db.Uuid
+  startedAt       DateTime  @map("started_at") @db.Timestamptz(3)
+  endedAt         DateTime? @map("ended_at") @db.Timestamptz(3)
+  changedById     String    @map("changed_by_id") @db.Uuid
+  resumedById     String?   @map("resumed_by_id") @db.Uuid
+  previousDueDate DateTime? @map("previous_due_date") @db.Date
+  newDueDate      DateTime? @map("new_due_date") @db.Date
+  reason          String    @db.Text
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  deadline        Deadline  @relation(fields: [deadlineId], references: [id], onDelete: Cascade)
+  changedBy       User      @relation(fields: [changedById], references: [id], onDelete: Restrict)
+  resumedBy       User?     @relation("DeadlineSuspensionResumedBy", fields: [resumedById], references: [id], onDelete: SetNull)
 
   @@index([deadlineId, startedAt])
   @@map("deadline_suspensions")
 }
 
 model Holiday {
-  id        String   @id @default(uuid()) @db.Uuid
-  date      DateTime @db.Date
-  name      String   @db.VarChar(200)
-  scope     String   @default("MUNICIPAL") @db.VarChar(50)
-  timezone  String   @db.VarChar(100)
-  active    Boolean  @default(true)
-  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+  id        String       @id @default(uuid()) @db.Uuid
+  date      DateTime     @db.Date
+  name      String       @db.VarChar(200)
+  scope     HolidayScope @default(MUNICIPAL)
+  timezone  String       @db.VarChar(100)
+  active    Boolean      @default(true)
+  createdAt DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime     @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   @@unique([date, scope])
   @@index([active, date])
   @@map("holidays")
 }
 
+model DeadlineExtensionRequest {
+  id               String                         @id @default(uuid()) @db.Uuid
+  propositionId    String                         @map("proposition_id") @db.Uuid
+  deadlineId       String                         @map("deadline_id") @db.Uuid
+  documentId       String?                        @map("document_id") @db.Uuid
+  requestedAt      DateTime                       @map("requested_at") @db.Date
+  requestedDueDate DateTime?                      @map("requested_due_date") @db.Date
+  requestedDays    Int?                           @map("requested_days")
+  reason           String?                        @db.Text
+  status           DeadlineExtensionRequestStatus @default(RECEIVED)
+  registeredById   String                         @map("registered_by_id") @db.Uuid
+  decidedById      String?                        @map("decided_by_id") @db.Uuid
+  decidedAt        DateTime?                      @map("decided_at") @db.Timestamptz(3)
+  createdAt        DateTime                       @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt        DateTime                       @updatedAt @map("updated_at") @db.Timestamptz(3)
+  proposition      Proposition                    @relation(fields: [propositionId], references: [id], onDelete: Cascade)
+  deadline         Deadline                       @relation(fields: [deadlineId], references: [id], onDelete: Cascade)
+  document         Document?                      @relation(fields: [documentId], references: [id], onDelete: SetNull)
+  registeredBy     User                           @relation("ExtensionRequestRegisteredBy", fields: [registeredById], references: [id], onDelete: Restrict)
+  decidedBy        User?                          @relation("ExtensionRequestDecidedBy", fields: [decidedById], references: [id], onDelete: SetNull)
+  extension        DeadlineExtension?
+
+  @@index([propositionId, requestedAt])
+  @@index([deadlineId, status])
+  @@index([documentId])
+  @@map("deadline_extension_requests")
+}
+
 model Conversation {
-  id                  String                @id @default(uuid()) @db.Uuid
-  userId              String                @map("user_id") @db.Uuid
-  propositionId       String?               @map("proposition_id") @db.Uuid
-  channel             ConversationChannel
-  title               String?               @db.VarChar(300)
-  lastInteractionAt   DateTime              @default(now()) @map("last_interaction_at") @db.Timestamptz(3)
-  createdAt           DateTime              @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt           DateTime              @updatedAt @map("updated_at") @db.Timestamptz(3)
-  user                User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
-  proposition         Proposition?          @relation(fields: [propositionId], references: [id], onDelete: SetNull)
-  messages            ConversationMessage[]
+  id                String                @id @default(uuid()) @db.Uuid
+  userId            String                @map("user_id") @db.Uuid
+  propositionId     String?               @map("proposition_id") @db.Uuid
+  channel           ConversationChannel
+  title             String?               @db.VarChar(300)
+  lastInteractionAt DateTime              @default(now()) @map("last_interaction_at") @db.Timestamptz(3)
+  createdAt         DateTime              @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt         DateTime              @updatedAt @map("updated_at") @db.Timestamptz(3)
+  user              User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  proposition       Proposition?          @relation(fields: [propositionId], references: [id], onDelete: SetNull)
+  messages          ConversationMessage[]
 
   @@index([userId, lastInteractionAt])
   @@index([propositionId])
@@ -929,18 +1081,18 @@ model AuditLog {
 }
 
 model OutboxEvent {
-  id             String       @id @default(uuid()) @db.Uuid
-  eventType      String       @map("event_type") @db.VarChar(150)
-  aggregateType  String       @map("aggregate_type") @db.VarChar(150)
-  aggregateId    String       @map("aggregate_id") @db.VarChar(100)
-  payload        Json
-  status         OutboxStatus @default(PENDING)
-  attempts       Int          @default(0)
-  availableAt    DateTime     @default(now()) @map("available_at") @db.Timestamptz(3)
-  publishedAt    DateTime?    @map("published_at") @db.Timestamptz(3)
-  lastError      String?      @map("last_error") @db.Text
-  createdAt      DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt      DateTime     @updatedAt @map("updated_at") @db.Timestamptz(3)
+  id            String       @id @default(uuid()) @db.Uuid
+  eventType     String       @map("event_type") @db.VarChar(150)
+  aggregateType String       @map("aggregate_type") @db.VarChar(150)
+  aggregateId   String       @map("aggregate_id") @db.VarChar(100)
+  payload       Json
+  status        OutboxStatus @default(PENDING)
+  attempts      Int          @default(0)
+  availableAt   DateTime     @default(now()) @map("available_at") @db.Timestamptz(3)
+  publishedAt   DateTime?    @map("published_at") @db.Timestamptz(3)
+  lastError     String?      @map("last_error") @db.Text
+  createdAt     DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt     DateTime     @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   @@index([status, availableAt])
   @@index([aggregateType, aggregateId])
@@ -948,8 +1100,8 @@ model OutboxEvent {
 }
 
 model ProcessedEvent {
-  consumer   String   @db.VarChar(150)
-  eventId    String   @map("event_id") @db.Uuid
+  consumer    String   @db.VarChar(150)
+  eventId     String   @map("event_id") @db.Uuid
   processedAt DateTime @default(now()) @map("processed_at") @db.Timestamptz(3)
 
   @@id([consumer, eventId])

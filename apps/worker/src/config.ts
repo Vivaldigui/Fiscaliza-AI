@@ -48,6 +48,7 @@ const schema = z
     OUTBOX_POLL_INTERVAL_MS: z.coerce.number().int().min(250).default(1_000),
     OUTBOX_BATCH_SIZE: z.coerce.number().int().min(1).max(100).default(20),
     WORKER_HEALTH_PORT: z.coerce.number().int().positive().default(3002),
+    DEADLINE_SWEEP_INTERVAL_MS: z.coerce.number().int().min(10_000).default(3_600_000),
     PDF_EXTRACTOR_SCRIPT: z.string().optional(),
   })
   .superRefine((value, context) => {

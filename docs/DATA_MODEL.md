@@ -17,18 +17,21 @@ erDiagram
   Role ||--o{ UserRole : grants
   User o|--o| Councilor : represents
   Councilor ||--o{ WhatsappIdentity : owns
-  Councilor ||--o{ Proposition : authors
+  Councilor ||--o{ PropositionAuthor : authors
+  Proposition ||--|{ PropositionAuthor : has
   Proposition ||--o{ RequestedItem : decomposes
   Proposition ||--o{ PropositionDocument : has
   Document ||--o{ PropositionDocument : links
-  Document ||--o{ DocumentPage : contains
-  Document ||--o{ DocumentChunk : chunks
   Document ||--o{ DocumentProcessingAttempt : attempts
+  DocumentProcessingAttempt ||--o{ DocumentPage : contains
+  DocumentProcessingAttempt ||--o{ DocumentChunk : chunks
   User o|--o{ DocumentProcessingAttempt : requests
   Proposition ||--o{ Response : receives
   Response ||--o{ ResponseDocument : has
   Document ||--o{ ResponseDocument : links
-  Response ||--o{ ResponseExtension : extends
+  Response ||--o{ AssociationEvaluation : evaluated
+  AssociationEvaluation ||--o{ AssociationCandidate : ranks
+  Response ||--o{ ResponseAssociationRevision : revises
   Proposition ||--o{ Analysis : analyzed
   Response o|--o{ Analysis : input
   Analysis ||--o{ AnalysisItem : contains
@@ -37,6 +40,8 @@ erDiagram
   DocumentPage ||--o{ Evidence : references
   Proposition ||--o{ Deadline : tracks
   Deadline ||--o{ DeadlineExtension : changes
+  Deadline ||--o{ DeadlineExtensionRequest : receives
+  Deadline ||--o{ DeadlineSuspension : suspends
   User ||--o{ Conversation : starts
   Conversation ||--o{ ConversationMessage : includes
   Proposition o|--o{ Conversation : contextualizes
@@ -67,7 +72,11 @@ Número E.164 normalizado, instância UAZAPI, estado de verificação e vínculo
 
 ### `Proposition`
 
-Campos centrais: tipo (`REQUEST`/`INDICATION`), número, ano, protocolo, data, autor, destinatário, assunto, resumo e status. A identidade administrativa é pelo menos `(type, number, year)`; há unique constraint com esses campos. Casos excepcionais de numeração duplicada entre órgãos deverão ser resolvidos antes da produção adicionando `originUnit` à chave.
+Campos centrais: tipo (`REQUEST`/`INDICATION`), número, ano, protocolo, data, destinatário, assunto, resumo e status. A identidade administrativa continua `(type, number, year)` com unique constraint e índice de consulta. Não foram inventados `origin`, `unit` ou `legislature`: a Câmara deverá decidir se fazem parte da identidade antes de importar fontes em que a numeração possa colidir.
+
+### `PropositionAuthor`
+
+Relação N:N entre proposição e vereador, com papéis `PRIMARY` e `COAUTHOR`. A chave composta impede repetir um vereador, e índice parcial garante no máximo um autor principal por proposição. O serviço exige exatamente um principal e ao menos um autor. Uma proposição com três autores continua sendo um único registro e os três vínculos ficam disponíveis à futura autorização por gabinete.
 
 ### `RequestedItem`
 
@@ -81,15 +90,15 @@ O objeto começa em `quarantine/{documentId}/original.pdf`. Somente após `secur
 
 ### `DocumentPage`
 
-Chave `(documentId, pageNumber)`, `extractedText`, `ocrText`, `effectiveText`, fonte efetiva, quantidade de caracteres, score/razão de qualidade, necessidade/estado/confiança de OCR. Páginas começam em 1 e correspondem à ordem física entregue pelo parser. Evidências futuras referenciam a página persistida, impedindo página fabricada no banco.
+Chave `(processingAttemptId, pageNumber)`, além de `documentId`, `extractedText`, `ocrText`, `effectiveText`, fonte efetiva, quantidade de caracteres, score/razão de qualidade, necessidade/estado/confiança de OCR. Páginas começam em 1 e correspondem à ordem física entregue pelo parser. A mesma página lógica pode existir em tentativas diferentes sem sobrescrever a versão histórica.
 
 ### `DocumentProcessingAttempt`
 
-Histórico imutável por `(documentId, attempt)`: gatilho (`UPLOAD`, `INBOX` ou `REPROCESS`), estado, solicitante, erro seguro e timestamps. Reprocessar incrementa a tentativa e recalcula somente páginas/chunks derivados; tentativas e auditorias anteriores permanecem.
+Histórico por `(documentId, attempt)`: gatilho (`UPLOAD`, `INBOX` ou `REPROCESS`), estado, solicitante, erro seguro e timestamps. Ele passou a ser o proprietário da versão de páginas/chunks. Reprocessar incrementa a tentativa e não remove derivados concluídos de tentativas anteriores. `AnalysisDocument.processingAttemptId` congela a entrada de uma análise futura e `Evidence.documentPageId` referencia a linha exata com `onDelete: Restrict`.
 
 ### `DocumentChunk`
 
-Trecho derivado de uma única página, com página, sequência, conteúdo e SHA-256. Na Fase 2, `embedding` permanece obrigatoriamente `NULL`. A coluna física existente é `vector(1536)`; provider, dimensão, coluna/índice versionado e estratégia de reindexação precisam de ADR antes da Fase 5.
+Trecho derivado de uma única página/tentativa, com página, sequência, conteúdo e SHA-256. Na Fase 3, `embedding` permanece `NULL`. A coluna física existente é `vector(1536)`; provider, dimensão, coluna/índice versionado e estratégia de reindexação precisam de ADR antes da Fase 5.
 
 ### Vínculos de documento
 
@@ -101,13 +110,17 @@ Trecho derivado de uma única página, com página, sequência, conteúdo e SHA-
 
 Relação N:1 com proposição, nunca 1:1. Guarda tipo (`INITIAL`, `COMPLEMENTARY`, `RECTIFICATION`, `OTHER`), datas, protocolo, remetente, status de associação, confiança e método (`AUTOMATIC`, `MANUAL`). Uma resposta ambígua pode existir sem `propositionId` até revisão.
 
-### `ResponseExtension`
+### `DeadlineExtensionRequest`
 
-Registra pedido/comunicação de prorrogação relacionada à resposta: data, novo prazo solicitado, motivo e documento de suporte. Não substitui o histórico formal em `DeadlineExtension`.
+Registra o pedido/comunicação de prorrogação: proposição/prazo, data, dias/data solicitados, motivo, documento de suporte, responsável e decisão. Não muda o vencimento. O antigo `ResponseExtension` foi preservado por migration como `LegacyResponseExtension`/`legacy_response_extensions` apenas para compatibilidade; novos fluxos não o utilizam.
 
 ### Candidatos de associação
 
-`AssociationCandidate` preserva candidatos e pontuações por sinal (tipo/número/ano, protocolo, autor, assunto, referência textual). A associação automática só ocorre se o melhor candidato superar o limiar e a margem mínima configurada; caso contrário, `NEEDS_REVIEW`.
+`AssociationEvaluation` congela threshold, margem, pesos, melhor score e segundo score de uma execução. `AssociationCandidate` preserva até dez candidatos, rank, estado e pontuações por sinal (referência explícita, número, ano, tipo, protocolo, assunto e proximidade temporal), além das explicações legíveis. A associação automática só ocorre se o melhor candidato atingir o limiar **e** superar o segundo pela margem mínima; caso contrário, `NEEDS_REVIEW`.
+
+### `ResponseAssociationRevision`
+
+Histórico append-only com proposição/método anterior e novo, ator, motivo e timestamp. `Response.associationVersion` implementa concorrência otimista: uma confirmação baseada em versão antiga retorna conflito em vez de sobrescrever a decisão de outro usuário.
 
 ## 6. Análises, revisões e evidências
 
@@ -135,7 +148,9 @@ Provider, modelo, operação, tokens de entrada/saída, latência, custo estimad
 
 ### `Deadline`
 
-Mantém data base, prazo original, prazo atual, estado (`OPEN`, `DUE_SOON`, `OVERDUE`, `RESPONDED`, `EXTENDED`), modo de contagem e timezone usados no cálculo. Um snapshot da configuração garante explicabilidade mesmo após mudança administrativa.
+Mantém data base, prazo original, prazo atual, estado (`OPEN`, `DUE_SOON`, `OVERDUE`, `EXTENDED`, `SUSPENDED`, `RESPONSE_RECEIVED`, `RESPONDED`), modo de contagem, timezone e versão otimista. `configurationSnapshot` contém chave/versão da configuração, política completa e feriados aplicáveis na criação. Alterações globais posteriores não recalculam prazos existentes.
+
+`RESPONSE_RECEIVED` registra somente que houve resposta protocolada/associada. `RESPONDED` permanece reservado para significado semântico futuro e não é atribuído pela Fase 3.
 
 ### `DeadlineExtension`
 
@@ -143,7 +158,11 @@ Evento imutável: prazo anterior, novo prazo, data da concessão, dias, respons�
 
 ### `Holiday`
 
-Data e nome, com escopo/timezone. Feriados são dados administrativos e alterações são auditadas. Finais de semana são tratados pelo calendário, não gravados como feriados.
+Data e nome, com timezone e escopo controlado (`NATIONAL`, `STATE`, `MUNICIPAL`, `INSTITUTIONAL`). `(date, scope)` é único. Feriados são dados administrativos e alterações são auditadas. Finais de semana são tratados pelo calendário, não gravados como feriados.
+
+### `DeadlineSuspension`
+
+Evento histórico com início, fim, motivo, quem suspendeu/retomou e vencimento anterior/novo. Apenas uma suspensão aberta por prazo é permitida por índice parcial. A retomada recompõe dias segundo a política congelada e não destrói o calendário anterior.
 
 ## 8. Conversas e notificações
 
@@ -189,11 +208,15 @@ Outbox transacional para publicação confiável; consumidor registra evento pro
 
 ## 10. Índices e invariantes críticos
 
-- unique em `Proposition(type, number, year)`;
+- unique em `Proposition(type, number, year)` e decisão registrada de revisar a chave caso existam múltiplas origens/unidades;
+- chave de `PropositionAuthor` em `(propositionId, councilorId)` e um único `PRIMARY` por índice parcial;
 - unique em `Document.sha256` e `Document.storageKey`;
-- unique em `DocumentPage(documentId, pageNumber)`;
+- unique em `DocumentPage(processingAttemptId, pageNumber)`;
 - unique em `DocumentProcessingAttempt(documentId, attempt)`;
-- unique em `DocumentChunk(documentId, pageNumber, sequence)`; `contentHash` permite cache/controle de derivação;
+- unique em `DocumentChunk(processingAttemptId, pageNumber, sequence)`; `contentHash` permite cache/controle de derivação;
+- um documento principal por proposição/resposta por índices parciais e vínculo físico único por chave composta;
+- uma suspensão aberta por prazo e uma concessão por pedido de prorrogação;
+- versões otimistas em `Response` e `Deadline` evitam escrita concorrente perdida;
 - unique em `RequestedItem(propositionId, sequence)`;
 - unique em `InboundMessage(instance, messageId)`;
 - unique em `Analysis.inputHash` por operação/versão quando reutilizável;
@@ -208,6 +231,6 @@ Outbox transacional para publicação confiável; consumidor registra evento pro
 
 ## 12. Decisões deliberadamente adiadas
 
-- A unicidade atual de proposição continua `(type, number, year)`. A Câmara deve decidir na Fase 3 se unidade/origem também integra a identidade.
-- `ResponseExtension` representa documento/resposta complementar; `DeadlineExtension` representa alteração imutável do prazo. A nomenclatura e os fluxos serão revisados conceitualmente na Fase 3, sem mudança oportunista na Fase 2.
+- A unicidade atual de proposição continua `(type, number, year)`. A Câmara deve decidir antes de fontes multiunidade se origem/unidade/legislatura também integram a identidade; a Fase 3 não inventou esse dado institucional.
+- O conceito ambíguo `ResponseExtension` foi isolado como legado. Novos pedidos usam `DeadlineExtensionRequest`; somente `DeadlineExtension` altera efetivamente o prazo.
 - A dimensão fixa de `DocumentChunk.embedding` não define provider. Embeddings não são calculados nesta fase e exigem decisão versionada na Fase 5.
