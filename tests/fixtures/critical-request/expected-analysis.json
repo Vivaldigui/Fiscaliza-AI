@@ -1,0 +1,7 @@
+{
+  "items": [
+    { "sequence": 1, "status": "ANSWERED" },
+    { "sequence": 2, "status": "PARTIALLY_ANSWERED" },
+    { "sequence": 3, "status": "NOT_ANSWERED" }
+  ]
+}

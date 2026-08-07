@@ -1,0 +1,18 @@
+{
+  "name": "@fiscaliza/ai",
+  "version": "0.1.0",
+  "private": true,
+  "type": "commonjs",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "pnpm build && node --test dist",
+    "test:integration": "node --test"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "0.60.0",
+    "zod": "3.25.76"
+  }
+}

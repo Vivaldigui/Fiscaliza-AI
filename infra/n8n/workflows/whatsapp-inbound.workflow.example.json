@@ -1,0 +1,41 @@
+{
+  "name": "Fiscaliza AI - WhatsApp inbound (exemplo inativo)",
+  "active": false,
+  "nodes": [
+    {
+      "name": "UAZAPI Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 0],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "fiscaliza/whatsapp/inbound",
+        "responseMode": "lastNode"
+      }
+    },
+    {
+      "name": "Backend inbound",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [280, 0],
+      "parameters": {
+        "method": "POST",
+        "url": "={{$env.FISCALIZA_API_URL + '/integrations/whatsapp/inbound'}}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "x-integration-secret", "value": "={{$env.FISCALIZA_N8N_SECRET}}" }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{JSON.stringify($json)}}"
+      }
+    }
+  ],
+  "connections": {
+    "UAZAPI Webhook": { "main": [[{ "node": "Backend inbound", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" }
+}

@@ -1,0 +1,35 @@
+{
+  "name": "Fiscaliza AI - Alerta de prazo (exemplo inativo)",
+  "active": false,
+  "nodes": [
+    {
+      "name": "Backend Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 0],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "fiscaliza/deadline-alert",
+        "responseMode": "onReceived"
+      }
+    },
+    {
+      "name": "Enviar UAZAPI",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [280, 0],
+      "parameters": {
+        "method": "POST",
+        "url": "={{$env.UAZAPI_SEND_URL}}",
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{JSON.stringify($json)}}"
+      }
+    }
+  ],
+  "connections": {
+    "Backend Webhook": { "main": [[{ "node": "Enviar UAZAPI", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" }
+}

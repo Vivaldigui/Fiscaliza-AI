@@ -1,0 +1,5 @@
+REQUERIMENTO FICTÍCIO 38/2026
+
+1. Qual o número de veículos?
+2. Qual o valor gasto em manutenção?
+3. Quais empresas realizaram manutenção?

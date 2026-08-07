@@ -1,0 +1,16 @@
+node_modules/
+.pnpm-store/
+dist/
+.next/
+coverage/
+*.tsbuildinfo
+.env
+.env.*
+!.env.example
+data/inbox/*
+!data/inbox/.gitkeep
+data/minio/
+data/postgres/
+data/redis/
+*.log
+.turbo/
