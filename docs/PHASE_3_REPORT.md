@@ -166,6 +166,8 @@ O host Windows também possuía um PostgreSQL próprio concorrendo na porta 5432
 
 Uma tentativa de rodar build e typecheck em paralelo provocou corrida na pasta gerada `.next/types`. A ordem real do CI é sequencial; a suíte completa foi repetida nessa ordem e passou. A regressão também detectou uma fixture de coautoria sem `originalDueDate` após a inclusão da auditoria `DEADLINE_CREATED`; a fixture foi corrigida para refletir o contrato real do Prisma.
 
+Na primeira execução remota, `quality` passou, mas `clean-migration` encontrou que uma instalação nova não possuía os artefatos `dist` dos pacotes workspace antes de executar Jest diretamente. O workflow foi corrigido para compilar a API e toda a cadeia de dependências com `pnpm --filter @fiscaliza/api... build` antes dos testes de integração. A execução subsequente ficou verde.
+
 ## Auditoria e observabilidade
 
 Foram adicionados logs/auditorias para criação/alteração/vínculo de proposição, resposta, associação automática/manual/corrigida, criação/extensão/suspensão/retomada de prazo e CRUD de feriado. Payloads contêm IDs, versões, scores/datas mínimos e nunca texto integral do PDF.

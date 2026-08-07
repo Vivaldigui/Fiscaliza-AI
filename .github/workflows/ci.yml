@@ -63,4 +63,5 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm --filter @fiscaliza/database db:deploy
       - run: pnpm --filter @fiscaliza/database db:generate
+      - run: pnpm --filter @fiscaliza/api... build
       - run: pnpm --filter @fiscaliza/api test:integration
