@@ -41,8 +41,9 @@ O n8n não contém regras de autorização, associação, prazo ou análise. Ele
 
 ```text
 apps/
-  api/                       # NestJS: REST, regras, autenticação e consumidores BullMQ
+  api/                       # NestJS: REST, regras, autenticação, autorização e outbox
   web/                       # Next.js: interface responsiva e acessível
+  worker/                    # BullMQ: segurança, PDF, OCR, chunks, outbox e inbox
 packages/
   database/                  # Prisma schema, migrations, seed e PrismaClient
   shared/                    # contratos, enums, utilitários e schemas sem dependência de framework
@@ -82,37 +83,40 @@ Controllers só autenticam, validam, autorizam e delegam. Processamento de PDF, 
 
 ```mermaid
 stateDiagram-v2
-  [*] --> UPLOADED
-  UPLOADED --> EXTRACTING
+  [*] --> RECEIVED
+  RECEIVED --> QUARANTINED
+  QUARANTINED --> SECURITY_SCAN
+  SECURITY_SCAN --> EXTRACTING: CLEAN ou SKIPPED explícito
+  SECURITY_SCAN --> NEEDS_REVIEW: INFECTED
+  SECURITY_SCAN --> FAILED: scanner indisponível
   EXTRACTING --> OCR: texto insuficiente
-  EXTRACTING --> CLASSIFYING: texto suficiente
-  OCR --> CLASSIFYING: OCR aceitável
-  OCR --> NEEDS_REVIEW: OCR ilegível
-  CLASSIFYING --> ASSOCIATING
-  ASSOCIATING --> ANALYZING: proposição ou associação confiável
-  ASSOCIATING --> NEEDS_REVIEW: associação ambígua
-  ANALYZING --> COMPLETED
-  ANALYZING --> FAILED: tentativas esgotadas
-  EXTRACTING --> FAILED: falha técnica
-  FAILED --> EXTRACTING: reprocessamento autorizado
-  NEEDS_REVIEW --> ASSOCIATING: correção humana
+  EXTRACTING --> CHUNKING: texto suficiente
+  OCR --> CHUNKING
+  CHUNKING --> COMPLETED: páginas confiáveis
+  CHUNKING --> NEEDS_REVIEW: texto ainda insuficiente
+  EXTRACTING --> FAILED: PDF inválido, limite ou erro técnico
+  FAILED --> QUARANTINED: reprocessamento explícito
+  NEEDS_REVIEW --> QUARANTINED: reprocessamento explícito
 ```
 
-1. API ou inbox recebe o PDF.
-2. O serviço calcula SHA-256 em streaming e rejeita duplicata lógica sem duplicar o objeto.
-3. O original é salvo no MinIO; o PostgreSQL guarda apenas metadados e `storageKey`.
-4. Extração preserva páginas. OCR só roda em páginas com densidade de texto insuficiente.
-5. Classificação extrai tipo, número, ano, autoria, datas, protocolo, assunto e referências com confiança por campo.
-6. Associação usa sinais determinísticos primeiro e semânticos depois. Resultados abaixo do limiar ficam em `NEEDS_REVIEW`.
-7. Proposições são decompostas; respostas são analisadas item a item; embeddings são gerados por página/chunk.
-8. `AnalysisCompleted` é persistido na mesma transação que o evento de outbox. Só depois a notificação pode ser enviada.
+1. API ou inbox passa o PDF ao mesmo `DocumentIngestionService`.
+2. O serviço valida extensão/MIME/magic bytes, calcula SHA-256 em streaming e evita duplicata lógica e física.
+3. O original entra em `quarantine/{documentId}/original.pdf`; a transação grava documento, tentativa, auditoria e outbox.
+4. O dispatcher publica um job BullMQ determinístico. O worker executa ClamAV, promove somente arquivos `CLEAN` e extrai cada página física isoladamente.
+5. `TextQualityAnalyzer` decide OCR por página. Poppler e Tesseract recebem somente as páginas necessárias, com timeout e concorrência próprios.
+6. O worker escolhe `effectiveText` deterministicamente, cria chunks restritos à página e mantém `embedding = NULL`.
+7. Falhas e páginas ilegíveis são consultáveis e reprocessáveis por nova tentativa, sem apagar o histórico anterior.
+
+Classificação, associação, análise por LLM e embeddings continuam fora do worker da Fase 2 e serão adicionados sem refazer `Document`/`DocumentPage`. O fluxo detalhado está em `DOCUMENT_PIPELINE.md`.
 
 ## 6. Eventos, filas e consistência
 
-Filas BullMQ planejadas:
+Fila BullMQ implementada:
 
-- `document-ingestion`: checksum, armazenamento e registro;
-- `document-extraction`: texto por página e OCR condicional;
+- `document-processing`: job tipado por documento/tentativa, segurança, extração, OCR e chunks;
+
+Filas futuras planejadas:
+
 - `document-classification`: tipo e metadados;
 - `document-association`: candidatos e decisão;
 - `analysis`: decomposição, resposta item a item e resumo;
@@ -167,6 +171,9 @@ PostgreSQL é a fonte de verdade. MinIO requer versionamento/backup; Redis é re
 | ORM               | Prisma                                                       | schema central, migrations e client tipado                  |
 | Arquivos          | MinIO/S3                                                     | objetos fora do banco e URLs assinadas                      |
 | Fila/sessão       | Redis + BullMQ                                               | jobs recuperáveis e sessão curta do WhatsApp                |
+| Worker documental | aplicação Node separada da API                               | parsing/OCR não bloqueiam nem ampliam o processo HTTP       |
+| PDF/OCR           | PDF.js em subprocesso + Poppler/Tesseract por página         | limite de memória/tempo e OCR somente quando necessário     |
+| Antivírus         | interface `DocumentSecurityScanner` + ClamAV INSTREAM        | quarentena explícita e implementação substituível           |
 | Auth              | access JWT curto + refresh opaco rotativo em cookie HttpOnly | revogação e menor exposição no navegador                    |
 | Auditoria/eventos | audit append-only + transactional outbox                     | rastreabilidade e entrega confiável                         |
 | IA                | interface `LLMProvider`; Anthropic primeiro                  | troca de provider/modelo sem regra no SDK                   |
@@ -178,7 +185,8 @@ PostgreSQL é a fonte de verdade. MinIO requer versionamento/backup; Redis é re
 fiscaliza-ai/
 ├─ apps/
 │  ├─ api/src/{auth,authorization,councilors,health,settings,common}/
-│  └─ web/src/{app,components,lib}/
+│  ├─ web/src/{app,components,lib}/
+│  └─ worker/{src,scripts}/
 ├─ packages/
 │  ├─ database/{prisma,src}/
 │  ├─ shared/src/

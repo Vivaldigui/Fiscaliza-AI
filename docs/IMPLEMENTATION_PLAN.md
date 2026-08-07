@@ -17,7 +17,7 @@ Entregas pequenas, migráveis e testáveis. Nenhuma fase depende de mocks silenc
 
 ## Fase 1 — Fundação segura e executável (esta entrega)
 
-**Status:** implementada em 2026-08-07. Typecheck, lint, testes, build, validação Prisma/Compose e inspeção visual passaram. A aplicação da migration e os health checks contra serviços reais aguardam o Docker Desktop/daemon disponível no ambiente de validação.
+**Status:** concluída em 2026-08-07. Typecheck, lint, testes, build, Prisma e inspeção visual passaram na entrega original. Na Fase 2, migration e health checks também foram revalidados contra a stack Docker real.
 
 - pnpm/Turborepo TypeScript;
 - Docker Compose com PostgreSQL/pgvector, Redis, MinIO, API e web;
@@ -33,6 +33,8 @@ Entregas pequenas, migráveis e testáveis. Nenhuma fase depende de mocks silenc
 
 ## Fase 2 — Ingestão documental
 
+**Status:** implementada e validada em 2026-08-07. Detalhes, evidências, correções e limitações estão em `PHASE_2_REPORT.md`.
+
 - upload multipart e watcher de `/data/inbox`;
 - validação MIME/magic bytes, tamanho, SHA-256 e deduplicação;
 - MinIO privado e URLs assinadas;
@@ -42,6 +44,8 @@ Entregas pequenas, migráveis e testáveis. Nenhuma fase depende de mocks silenc
 - antivírus/quarentena configurável.
 
 **Critério:** PDF fictício aparece com páginas corretas; duplicata não duplica bytes; falha é reprocessável.
+
+**Resultado:** upload e watcher reais convergem para o mesmo serviço; MinIO privado, ClamAV, outbox/BullMQ, extração física por página, OCR seletivo, chunks sem vetor, URLs assinadas, RBAC, reprocessamento, painel, migration limpa, CI e health checks foram implementados. Nenhuma classificação, LLM, associação ou embedding foi antecipada.
 
 ## Fase 3 — Proposições, associação e prazos
 
@@ -122,7 +126,7 @@ As decisões abaixo não bloqueiam a fundação; defaults conservadores serão u
 5. Política de visibilidade entre vereadores, assessores, Secretaria e Auditoria.
 6. Classificação, retenção, base legal e possibilidade de enviar conteúdo ao provider LLM escolhido.
 7. UAZAPI: formato/assinatura real do webhook, limites, instâncias e garantia de idempotência no envio.
-8. Serviço OCR e embedding para produção, idiomas e requisitos de instalação.
+8. Confirmar se Tesseract local atende a qualidade/volume de produção e escolher provider/dimensão de embedding antes da Fase 5.
 9. Canal de alerta, antecedência e destinatários de cada tipo de prazo.
 10. Infraestrutura alvo, domínio, TLS, backup, RPO/RTO e secret manager.
 
@@ -137,3 +141,7 @@ As decisões abaixo não bloqueiam a fundação; defaults conservadores serão u
 - Problem Details e IDs de correlação;
 - configuração tipada persistida em JSON com versão/auditoria;
 - testes fictícios sem dados pessoais reais.
+- worker documental separado da API;
+- uma fila documental tipada por tentativa, com outbox e job ID determinístico;
+- ClamAV via `DocumentSecurityScanner` e Tesseract/Poppler via `OcrProvider` substituível;
+- chunks confinados à página e `embedding = NULL` durante toda a Fase 2.

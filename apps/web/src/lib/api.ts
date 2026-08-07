@@ -8,13 +8,14 @@ export interface ApiProblem {
 }
 
 export async function apiFetch<T>(path: string, init?: RequestInit, retry = true): Promise<T> {
+  const headers = new Headers(init?.headers);
+  if (init?.body && !(init.body instanceof FormData) && !headers.has('Content-Type')) {
+    headers.set('Content-Type', 'application/json');
+  }
   const response = await fetch(`${API_URL}${path}`, {
     ...init,
     credentials: 'include',
-    headers: {
-      'Content-Type': 'application/json',
-      ...init?.headers,
-    },
+    headers,
   });
   if (response.status === 401 && retry && path !== '/auth/refresh') {
     const refreshed = await fetch(`${API_URL}/auth/refresh`, {

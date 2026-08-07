@@ -8,7 +8,10 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "pnpm build && node --test dist",
-    "test:integration": "node --test"
+    "test": "pnpm build && node --test \"dist/**/*.test.js\"",
+    "test:integration": "pnpm build && node --test \"dist/**/*.test.js\""
+  },
+  "dependencies": {
+    "@fiscaliza/database": "workspace:*"
   }
 }

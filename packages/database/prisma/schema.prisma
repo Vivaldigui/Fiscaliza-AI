@@ -39,9 +39,13 @@ enum PropositionStatus {
 }
 
 enum ProcessingStatus {
+  RECEIVED
+  QUARANTINED
+  SECURITY_SCAN
   UPLOADED
   EXTRACTING
   OCR
+  CHUNKING
   CLASSIFYING
   ASSOCIATING
   ANALYZING
@@ -60,10 +64,45 @@ enum TextExtractionStatus {
 
 enum OcrStatus {
   NOT_REQUIRED
+  SKIPPED
   PENDING
   PROCESSING
   COMPLETED
   PARTIAL
+  FAILED
+}
+
+enum DocumentSecurityStatus {
+  PENDING
+  SCANNING
+  CLEAN
+  INFECTED
+  SKIPPED
+  FAILED
+}
+
+enum DocumentIngestionSource {
+  UPLOAD
+  INBOX
+}
+
+enum DocumentTextSource {
+  EXTRACTED
+  OCR
+  EMPTY
+}
+
+enum DocumentProcessingTrigger {
+  UPLOAD
+  INBOX
+  REPROCESS
+}
+
+enum DocumentAttemptStatus {
+  QUEUED
+  PROCESSING
+  COMPLETED
+  NEEDS_REVIEW
   FAILED
 }
 
@@ -243,6 +282,8 @@ model User {
   notifications         Notification[]
   auditLogs             AuditLog[]
   settingsUpdated       SystemSetting[]
+  uploadedDocuments     Document[]             @relation("DocumentUploadedBy")
+  documentAttempts      DocumentProcessingAttempt[] @relation("DocumentAttemptRequestedBy")
 
   @@index([status])
   @@map("users")
@@ -383,13 +424,24 @@ model Document {
   pageCount            Int?                    @map("page_count")
   kind                 DocumentKind            @default(UNKNOWN)
   accessLevel          AccessLevel             @default(INTERNAL) @map("access_level")
-  processingStatus     ProcessingStatus        @default(UPLOADED) @map("processing_status")
+  ingestionSource      DocumentIngestionSource @default(UPLOAD) @map("ingestion_source")
+  uploadedById         String?                 @map("uploaded_by_id") @db.Uuid
+  processingStatus     ProcessingStatus        @default(RECEIVED) @map("processing_status")
+  securityStatus       DocumentSecurityStatus  @default(PENDING) @map("security_status")
   textExtractionStatus TextExtractionStatus    @default(PENDING) @map("text_extraction_status")
   ocrStatus            OcrStatus               @default(NOT_REQUIRED) @map("ocr_status")
   extractedText        String?                 @map("extracted_text") @db.Text
   ocrText              String?                 @map("ocr_text") @db.Text
   extractionConfidence Decimal?                @map("extraction_confidence") @db.Decimal(4, 3)
   processingError      String?                 @map("processing_error") @db.Text
+  lastErrorCode        String?                 @map("last_error_code") @db.VarChar(100)
+  lastErrorAt          DateTime?               @map("last_error_at") @db.Timestamptz(3)
+  processingAttempt    Int                     @default(0) @map("processing_attempt")
+  reviewRequired       Boolean                 @default(false) @map("review_required")
+  quarantinedAt        DateTime?               @map("quarantined_at") @db.Timestamptz(3)
+  securityScannedAt    DateTime?               @map("security_scanned_at") @db.Timestamptz(3)
+  processingStartedAt  DateTime?               @map("processing_started_at") @db.Timestamptz(3)
+  processingCompletedAt DateTime?              @map("processing_completed_at") @db.Timestamptz(3)
   createdAt            DateTime                @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt            DateTime                @updatedAt @map("updated_at") @db.Timestamptz(3)
   pages                DocumentPage[]
@@ -398,8 +450,13 @@ model Document {
   responseLinks        ResponseDocument[]
   responseExtensions   ResponseExtension[]
   analysisInputs       AnalysisDocument[]
+  uploadedBy           User?                   @relation("DocumentUploadedBy", fields: [uploadedById], references: [id], onDelete: SetNull)
+  processingAttempts   DocumentProcessingAttempt[]
 
   @@index([processingStatus, createdAt])
+  @@index([securityStatus, createdAt])
+  @@index([reviewRequired, createdAt])
+  @@index([uploadedById, createdAt])
   @@index([kind, createdAt])
   @@map("documents")
 }
@@ -412,6 +469,13 @@ model DocumentPage {
   ocrText              String?     @map("ocr_text") @db.Text
   effectiveText        String      @default("") @map("effective_text") @db.Text
   extractionConfidence Decimal?    @map("extraction_confidence") @db.Decimal(4, 3)
+  qualityScore          Decimal?    @map("quality_score") @db.Decimal(4, 3)
+  characterCount        Int         @default(0) @map("character_count")
+  requiresOcr           Boolean     @default(false) @map("requires_ocr")
+  qualityReason         String?     @map("quality_reason") @db.VarChar(500)
+  ocrStatus             OcrStatus   @default(NOT_REQUIRED) @map("ocr_status")
+  ocrConfidence         Decimal?    @map("ocr_confidence") @db.Decimal(4, 3)
+  effectiveTextSource   DocumentTextSource @default(EMPTY) @map("effective_text_source")
   createdAt            DateTime    @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt            DateTime    @updatedAt @map("updated_at") @db.Timestamptz(3)
   document             Document    @relation(fields: [documentId], references: [id], onDelete: Cascade)
@@ -421,6 +485,28 @@ model DocumentPage {
   @@unique([documentId, pageNumber])
   @@index([documentId, pageNumber])
   @@map("document_pages")
+}
+
+model DocumentProcessingAttempt {
+  id            String                    @id @default(uuid()) @db.Uuid
+  documentId    String                    @map("document_id") @db.Uuid
+  attempt       Int
+  trigger       DocumentProcessingTrigger
+  status        DocumentAttemptStatus     @default(QUEUED)
+  requestedById String?                   @map("requested_by_id") @db.Uuid
+  errorCode     String?                   @map("error_code") @db.VarChar(100)
+  errorMessage  String?                   @map("error_message") @db.Text
+  startedAt     DateTime?                 @map("started_at") @db.Timestamptz(3)
+  finishedAt    DateTime?                 @map("finished_at") @db.Timestamptz(3)
+  createdAt     DateTime                  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt     DateTime                  @updatedAt @map("updated_at") @db.Timestamptz(3)
+  document      Document                  @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  requestedBy   User?                     @relation("DocumentAttemptRequestedBy", fields: [requestedById], references: [id], onDelete: SetNull)
+
+  @@unique([documentId, attempt])
+  @@index([status, createdAt])
+  @@index([requestedById, createdAt])
+  @@map("document_processing_attempts")
 }
 
 model DocumentChunk {

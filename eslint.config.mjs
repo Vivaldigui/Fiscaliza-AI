@@ -12,6 +12,7 @@ export default tseslint.config(
       '**/coverage/**',
       '**/generated/**',
       '**/prisma/migrations/**',
+      'apps/web/next-env.d.ts',
     ],
   },
   eslint.configs.recommended,

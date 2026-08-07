@@ -1,0 +1,30 @@
+{
+  "name": "@fiscaliza/worker",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "dev": "tsx watch src/main.ts",
+    "start": "node dist/main.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "jest --runInBand",
+    "test:integration": "jest --runInBand"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "3.864.0",
+    "@fiscaliza/database": "workspace:*",
+    "@fiscaliza/document-processing": "workspace:*",
+    "bullmq": "6.0.9",
+    "chokidar": "4.0.3",
+    "ioredis": "5.7.0",
+    "pdfjs-dist": "6.2.108",
+    "zod": "3.25.76"
+  },
+  "devDependencies": {
+    "@types/jest": "30.0.0",
+    "jest": "30.0.5",
+    "pdf-lib": "1.17.1",
+    "ts-jest": "29.4.1",
+    "tsx": "4.20.4"
+  }
+}

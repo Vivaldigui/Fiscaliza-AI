@@ -18,6 +18,7 @@ export class ProblemDetailsFilter implements ExceptionFilter {
       exception instanceof HttpException ? exception.getStatus() : HttpStatus.INTERNAL_SERVER_ERROR;
     const raw = exception instanceof HttpException ? exception.getResponse() : undefined;
     const detail = extractDetail(raw, status);
+    const code = extractCode(raw);
     const requestId = response.getHeader('x-request-id')?.toString();
     const problem: ProblemDetails = {
       type: `https://httpstatuses.com/${status}`,
@@ -26,9 +27,16 @@ export class ProblemDetailsFilter implements ExceptionFilter {
       detail,
       instance: request.originalUrl,
       ...(requestId ? { requestId } : {}),
+      ...(code ? { code } : {}),
     };
     response.status(status).type('application/problem+json').json(problem);
   }
+}
+
+function extractCode(raw: string | object | undefined): string | undefined {
+  if (!raw || typeof raw === 'string' || !('code' in raw)) return undefined;
+  const code = (raw as { code?: unknown }).code;
+  return typeof code === 'string' && code.length <= 100 ? code : undefined;
 }
 
 function extractDetail(raw: string | object | undefined, status: number): string {

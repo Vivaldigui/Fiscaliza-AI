@@ -9,6 +9,7 @@ allowBuilds:
   '@scarf/scarf': true
   argon2: true
   esbuild: true
+  msgpackr-extract: false
   nestjs-pino: true
   prisma: true
   sharp: true
@@ -25,3 +26,4 @@ minimumReleaseAgeExclude:
   - '@next/swc-win32-arm64-msvc@15.5.23'
   - '@next/swc-win32-x64-msvc@15.5.23'
   - next@15.5.23
+  - bullmq@6.0.9
