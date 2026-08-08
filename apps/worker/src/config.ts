@@ -50,6 +50,17 @@ const schema = z
     WORKER_HEALTH_PORT: z.coerce.number().int().positive().default(3002),
     DEADLINE_SWEEP_INTERVAL_MS: z.coerce.number().int().min(10_000).default(3_600_000),
     PDF_EXTRACTOR_SCRIPT: z.string().optional(),
+    LLM_PROVIDER: z.enum(['anthropic', 'fake']).default('fake'),
+    LLM_MODEL: z.string().default('fake-deterministic-v1'),
+    LLM_API_KEY: z.string().optional(),
+    AI_PROCESSING_ENABLED: booleanValue,
+    AI_REQUEST_TIMEOUT_MS: z.coerce.number().int().min(1_000).default(60_000),
+    AI_MAX_RETRIES: z.coerce.number().int().min(0).max(5).default(2),
+    AI_JOB_CONCURRENCY: z.coerce.number().int().min(1).max(16).default(1),
+    AI_MAX_PAGES_PER_BATCH: z.coerce.number().int().min(1).max(200).default(20),
+    AI_MAX_INPUT_CHARS: z.coerce.number().int().min(1_000).default(60_000),
+    AI_QUEUE_ATTEMPTS: z.coerce.number().int().min(1).max(10).default(3),
+    AI_QUEUE_BACKOFF_MS: z.coerce.number().int().min(100).default(10_000),
   })
   .superRefine((value, context) => {
     if (
@@ -68,6 +79,24 @@ const schema = z
         code: z.ZodIssueCode.custom,
         path: ['DOCUMENT_CHUNK_OVERLAP'],
         message: 'deve ser menor que DOCUMENT_CHUNK_SIZE',
+      });
+    }
+    if (value.AI_PROCESSING_ENABLED && value.LLM_PROVIDER === 'anthropic' && !value.LLM_API_KEY) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['LLM_API_KEY'],
+        message: 'obrigatória quando AI_PROCESSING_ENABLED=true e LLM_PROVIDER=anthropic',
+      });
+    }
+    if (
+      value.NODE_ENV === 'production' &&
+      value.AI_PROCESSING_ENABLED &&
+      value.LLM_PROVIDER === 'fake'
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['LLM_PROVIDER'],
+        message: 'provider "fake" não pode ficar ativo em produção',
       });
     }
   });

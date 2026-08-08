@@ -8,8 +8,11 @@ import {
   type DocumentQueuePayload,
   TesseractCliOcrProvider,
 } from '@fiscaliza/document-processing';
+import { createLLMProvider } from '@fiscaliza/ai';
 import { UnrecoverableError, Worker } from 'bullmq';
 import Redis from 'ioredis';
+import { AiAnalysisPipeline } from './ai/ai-pipeline';
+import { AI_QUEUE, type AiQueuePayload } from './ai/ai-queue';
 import { loadConfig } from './config';
 import { DocumentPipeline } from './document-pipeline';
 import { createDeadlineMaintenance } from './deadline-maintenance';
@@ -17,7 +20,7 @@ import { DocumentProcessingStateService } from './document-state';
 import { WorkerHealthServer } from './health-server';
 import { InboxWatcher } from './inbox-watcher';
 import { StructuredLogger } from './logger';
-import { createDocumentQueue, OutboxDispatcher } from './outbox-dispatcher';
+import { createAiQueue, createDocumentQueue, OutboxDispatcher } from './outbox-dispatcher';
 import { PdfJsSubprocessExtractor } from './pdf-extractor';
 import { WorkerObjectStorage } from './storage';
 
@@ -52,7 +55,14 @@ async function bootstrap(): Promise<void> {
     logger,
   );
   const queue = createDocumentQueue(redis);
-  const outbox = new OutboxDispatcher(prisma, queue, redis, config, logger);
+  const aiQueue = createAiQueue(redis);
+  const llmProvider = createLLMProvider({
+    provider: config.LLM_PROVIDER,
+    model: config.LLM_MODEL,
+    ...(config.LLM_API_KEY ? { apiKey: config.LLM_API_KEY } : {}),
+  });
+  const aiPipeline = new AiAnalysisPipeline(prisma, llmProvider, config, logger);
+  const outbox = new OutboxDispatcher(prisma, queue, aiQueue, redis, config, logger);
   const inbox = new InboxWatcher(prisma, storage, config, logger);
   const health = new WorkerHealthServer(prisma, redis, storage, config, logger);
   const worker = new Worker<DocumentQueuePayload>(
@@ -115,8 +125,26 @@ async function bootstrap(): Promise<void> {
   });
   worker.on('error', (error) => logger.error('Worker BullMQ falhou.', { error: error.message }));
 
+  const aiWorker = new Worker<AiQueuePayload>(
+    AI_QUEUE,
+    async (job) => {
+      await aiPipeline.process(job.data.analysisId, job.id ?? 'unknown');
+    },
+    {
+      connection: redis,
+      concurrency: config.AI_JOB_CONCURRENCY,
+      lockDuration: Math.max(30_000, config.AI_REQUEST_TIMEOUT_MS * 4),
+    },
+  );
+  aiWorker.on('error', (error) => logger.error('Worker de IA falhou.', { error: error.message }));
+
   await Promise.all([prisma.$connect(), redis.ping(), storage.assertBucketAvailable()]);
-  await Promise.all([queue.waitUntilReady(), worker.waitUntilReady()]);
+  await Promise.all([
+    queue.waitUntilReady(),
+    worker.waitUntilReady(),
+    aiQueue.waitUntilReady(),
+    aiWorker.waitUntilReady(),
+  ]);
   const deadlineMaintenance = await createDeadlineMaintenance(prisma, redis, config, logger);
   outbox.start();
   if (config.DOCUMENT_WATCHER_ENABLED) await inbox.start();
@@ -126,6 +154,11 @@ async function bootstrap(): Promise<void> {
   }
   if (!config.DOCUMENT_OCR_ENABLED)
     logger.warn('OCR desabilitado explicitamente.', { stage: 'ocr' });
+  if (!config.AI_PROCESSING_ENABLED) {
+    logger.warn('Processamento por IA desabilitado explicitamente (AI_PROCESSING_ENABLED=false).', {
+      stage: 'ai',
+    });
+  }
   health.start();
   logger.info('Worker documental pronto.', {
     queue: DOCUMENT_QUEUE,
@@ -142,6 +175,8 @@ async function bootstrap(): Promise<void> {
       inbox.stop(),
       worker.close(),
       queue.close(),
+      aiWorker.close(),
+      aiQueue.close(),
       deadlineMaintenance.worker.close(),
       deadlineMaintenance.queue.close(),
       health.stop(),

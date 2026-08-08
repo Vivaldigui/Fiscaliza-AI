@@ -1,6 +1,6 @@
 # Fiscaliza AI
 
-Aplicação interna, estruturada e auditável para acompanhar requerimentos, indicações, respostas, evidências e prazos de uma Câmara Municipal. Esta entrega implementa a **Fase 3 (proposições, respostas, associação e prazos)** sobre a ingestão documental segura das Fases 1 e 2.
+Aplicação interna, estruturada e auditável para acompanhar requerimentos, indicações, respostas, evidências e prazos de uma Câmara Municipal. Esta entrega implementa a **Fase 4 (IA estruturada, evidências e revisão humana)** sobre a camada legislativa determinística das Fases 1–3.
 
 ## O que já está implementado
 
@@ -23,10 +23,15 @@ Aplicação interna, estruturada e auditável para acompanhar requerimentos, ind
 - pedidos e concessões de prorrogação separados, suspensões, retomadas e concorrência otimista;
 - worker com varredura idempotente de prazos e eventos outbox para vencimento/aproximação;
 - telas operacionais de proposições, respostas, associações, prazos, feriados, timeline e dashboard;
-- abstração `LLMProvider`, implementação inicial Anthropic e prompts versionados (a ativação do pipeline é Fase 4);
+- abstração `LLMProvider` com `AnthropicProvider` e `FakeLLMProvider` (dublê determinístico para desenvolvimento/CI), escolhidos por `createLLMProvider`;
+- extração estruturada de requerimentos/indicações em itens verificáveis, com origem imutável (`DocumentPage`) e versionamento não destrutivo (`RequestedItem.active`);
+- análise cumulativa de respostas item a item, por lote de páginas, com validação determinística de evidência (`documentPageId` + trecho real) e resumo executivo derivado dos itens;
+- `AI_PROCESSING_ENABLED=false` por padrão (fail closed): nenhuma chamada externa ocorre sem ativação operacional explícita;
+- fila `ai-processing` assíncrona, cache por `inputHash`, `AIUsage` e revisão humana append-only (`AnalysisRevision`);
+- tela de análise na proposição: itens, evidências, confiança, histórico e revisão manual;
 - contratos e exemplos inativos de workflows n8n.
 
-Análise semântica de respostas, decomposição de solicitações, embeddings, RAG e WhatsApp end-to-end permanecem deliberadamente nas Fases 4 e 5 de `docs/IMPLEMENTATION_PLAN.md`. A Fase 3 não chama LLM, não cria embeddings e não atribui significado de atendimento integral à mera chegada de uma resposta.
+Embeddings, RAG e WhatsApp end-to-end permanecem deliberadamente na Fase 5 de `docs/IMPLEMENTATION_PLAN.md`. A Fase 4 não implementa chat genérico com PDF, não cria embeddings e não afirma conclusão jurídica — apenas descreve fatos documentais rastreáveis a página e trecho.
 
 ## Pré-requisitos
 
@@ -92,19 +97,25 @@ pnpm test
 pnpm build
 ```
 
-O CI também valida Prisma, todas as migrations em PostgreSQL limpo e os testes de integração da Fase 3. Todas as fixtures são sintéticas; a validação real está registrada em `docs/PHASE_3_REPORT.md`.
+O CI também valida Prisma, todas as migrations em PostgreSQL limpo e os testes de integração das Fases 3 e 4. Todas as fixtures são sintéticas; nenhum teste depende de credencial real de LLM (`FakeLLMProvider`). A validação está registrada em `docs/PHASE_3_REPORT.md` e `docs/PHASE_4_REPORT.md`.
 
 ## Bootstrap e seed
 
 O seed é idempotente para papéis e configurações. Ele só cria/atualiza o administrador quando e-mail e senha são fornecidos juntos. Um placeholder ou senha curta interrompe a operação; nenhuma credencial padrão é embutida no código.
 
-Configurações seed (todas editáveis e auditáveis): políticas de prazo por `REQUEST`/`INDICATION`, prorrogação, modo de contagem, timezone, suspensão, antecedência, confiança, pesos/limiares de associação e limite documental. Cada prazo guarda seu próprio snapshot e não muda retroativamente quando a configuração global é alterada.
+Configurações seed (todas editáveis e auditáveis): políticas de prazo por `REQUEST`/`INDICATION`, prorrogação, modo de contagem, timezone, suspensão, antecedência, confiança de análise, pesos/limiares de associação e limite documental. Cada prazo guarda seu próprio snapshot e não muda retroativamente quando a configuração global é alterada.
+
+## Dados locais reais
+
+`data/proposicoes-itanhandu/` (ignorado pelo Git) pode conter PDFs reais baixados por `scripts/baixar_proposicoes_itanhandu.py`. Esses arquivos nunca são fixture de teste, nunca entram em snapshot/log e não devem ser enviados a um provider de IA externo sem decisão institucional sobre LGPD e classificação.
 
 ## Documentação
 
 - `docs/ARCHITECTURE.md`
 - `docs/DATA_MODEL.md`
 - `docs/AI_PIPELINE.md`
+- `docs/ANALYSIS_PIPELINE.md`
+- `docs/AI_EVIDENCE_VALIDATION.md`
 - `docs/WHATSAPP_FLOW.md`
 - `docs/SECURITY.md`
 - `docs/IMPLEMENTATION_PLAN.md`
@@ -115,5 +126,6 @@ Configurações seed (todas editáveis e auditáveis): políticas de prazo por `
 - `docs/ASSOCIATION_ENGINE.md`
 - `docs/adr/ADR-001-DOCUMENT-PROCESSING-VERSIONING.md`
 - `docs/PHASE_3_REPORT.md`
+- `docs/PHASE_4_REPORT.md`
 
-Antes de produção, trate como bloqueadores o checklist de segurança, a política LGPD, a regra administrativa exata de contagem, o antivírus/quarentena, o contrato real da UAZAPI e os testes de restauração.
+Antes de produção, trate como bloqueadores o checklist de segurança, a política LGPD, a regra administrativa exata de contagem, o antivírus/quarentena, o contrato real da UAZAPI, os testes de restauração e a aprovação institucional para envio de documentos reais a um provider de IA externo.

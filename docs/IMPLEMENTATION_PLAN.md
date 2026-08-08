@@ -66,15 +66,18 @@ Entregas pequenas, migráveis e testáveis. Nenhuma fase depende de mocks silenc
 
 ## Fase 4 — IA estruturada e revisão
 
-- `LLMProvider` e `AnthropicProvider` sem acoplamento de domínio;
-- prompts e schemas Zod versionados;
-- decomposição distinta de requerimento/indicação;
-- análise cumulativa item a item, evidência por página e resumo executivo;
-- repair/retry controlado, cache por hash e `AIUsage`;
-- revisão humana append-only e telas detalhadas;
-- fixture crítica completo/parcial/não respondido.
+**Status:** implementada e validada em 2026-08-08 com fixtures sintéticas e `FakeLLMProvider`. Detalhes em `PHASE_4_REPORT.md`.
 
-**Critério:** nenhum JSON/evidência inválido persiste; fixture crítica mantém três estados; alteração humana preserva original.
+- `LLMProvider`, `AnthropicProvider` e `FakeLLMProvider` sem acoplamento de domínio (`createLLMProvider`);
+- prompts e schemas Zod versionados; evidência evoluída para `documentPageId` imutável;
+- decomposição distinta de requerimento/indicação, com `RequestedItem` versionado (`extractionAnalysisId`, `sourceDocumentPageId`, `active`);
+- análise cumulativa item a item por lote de páginas, merge determinístico entre lotes, evidência validada e resumo executivo derivado dos itens;
+- repair/retry controlado (`AI_MAX_RETRIES`), cache por `inputHash` único e `AIUsage` por chamada;
+- fila `ai-processing` assíncrona, `AI_PROCESSING_ENABLED` fail closed;
+- revisão humana append-only (`AnalysisRevision`) e tela dedicada na proposição;
+- fixture crítica completo/parcial/não respondido, complementação cumulativa, versionamento entre tentativas, evidência/trecho inventados, prompt injection, indicação e JSON inválido — todos cobertos por teste automatizado.
+
+**Critério:** nenhum JSON/evidência inválido persiste; fixture crítica mantém três estados; alteração humana preserva original. Todos atendidos e testados (ver `PHASE_4_REPORT.md`).
 
 ## Fase 5 — RAG, WhatsApp e notificações
 

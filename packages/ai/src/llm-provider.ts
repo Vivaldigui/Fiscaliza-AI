@@ -44,3 +44,18 @@ export interface LLMProvider {
   ): Promise<LLMResult<z.infer<TSchema>>>;
   generateText(request: TextGenerationRequest): Promise<LLMTextResult>;
 }
+
+/**
+ * Thrown by a provider when the model's output fails JSON parsing or Zod
+ * validation. Carries the raw (pre-validation) text so callers can pass it
+ * back into a bounded repair/retry prompt without re-issuing a full request.
+ */
+export class StructuredOutputValidationError extends Error {
+  constructor(
+    message: string,
+    public readonly rawOutput: string,
+  ) {
+    super(message);
+    this.name = 'StructuredOutputValidationError';
+  }
+}

@@ -60,24 +60,24 @@ As dependências apontam para dentro: `apps/*` pode depender de `packages/*`; `s
 
 ## 4. Componentes do backend
 
-| Módulo                             | Responsabilidade                                             |
-| ---------------------------------- | ------------------------------------------------------------ |
-| `AuthModule`                       | login, refresh token rotativo, revogação e identidade atual  |
-| `AuthorizationModule`              | RBAC e escopo por autoria/classificação                      |
-| `UsersModule` / `CouncilorsModule` | usuários, papéis, mandatos e identidades WhatsApp            |
-| `PropositionsModule`               | requerimentos/indicações, coautoria, documentos e timeline   |
-| `DocumentsModule`                  | upload, metadados, checksum, URLs assinadas e páginas        |
-| `ResponsesModule`                  | respostas 1:N, complementações, retificações e documentos    |
-| `AssociationsModule`               | candidatos determinísticos, decisão e revisão manual         |
-| `AnalysesModule`                   | análise estruturada, revisões, evidências e resumo executivo |
-| `DeadlinesModule`                  | política/snapshot, prorrogações, suspensões e estados        |
-| `HolidaysModule`                   | calendário administrativo por escopo                         |
-| `WhatsappModule`                   | idempotência, sessão Redis, contexto e respostas             |
-| `NotificationsModule`              | outbox, tentativas, entrega e falhas recuperáveis            |
-| `SettingsModule`                   | configurações tipadas, versionadas e auditadas               |
-| `AuditModule`                      | trilha append-only de ações relevantes                       |
-| `HealthModule`                     | liveness/readiness de API, PostgreSQL, Redis e MinIO         |
-| `JobsModule`                       | filas, retries, backoff, dead-letter e métricas              |
+| Módulo                             | Responsabilidade                                                                                 |
+| ---------------------------------- | ------------------------------------------------------------------------------------------------ |
+| `AuthModule`                       | login, refresh token rotativo, revogação e identidade atual                                      |
+| `AuthorizationModule`              | RBAC e escopo por autoria/classificação                                                          |
+| `UsersModule` / `CouncilorsModule` | usuários, papéis, mandatos e identidades WhatsApp                                                |
+| `PropositionsModule`               | requerimentos/indicações, coautoria, documentos e timeline                                       |
+| `DocumentsModule`                  | upload, metadados, checksum, URLs assinadas e páginas                                            |
+| `ResponsesModule`                  | respostas 1:N, complementações, retificações e documentos                                        |
+| `AssociationsModule`               | candidatos determinísticos, decisão e revisão manual                                             |
+| `AnalysesModule`                   | extração/análise estruturada, revisão humana append-only, evidências e resumo executivo (Fase 4) |
+| `DeadlinesModule`                  | política/snapshot, prorrogações, suspensões e estados                                            |
+| `HolidaysModule`                   | calendário administrativo por escopo                                                             |
+| `WhatsappModule`                   | idempotência, sessão Redis, contexto e respostas                                                 |
+| `NotificationsModule`              | outbox, tentativas, entrega e falhas recuperáveis                                                |
+| `SettingsModule`                   | configurações tipadas, versionadas e auditadas                                                   |
+| `AuditModule`                      | trilha append-only de ações relevantes                                                           |
+| `HealthModule`                     | liveness/readiness de API, PostgreSQL, Redis e MinIO                                             |
+| `JobsModule`                       | filas, retries, backoff, dead-letter e métricas                                                  |
 
 Controllers só autenticam, validam, autorizam e delegam. Processamento de PDF, OCR, embeddings e LLM ocorre em jobs idempotentes.
 
@@ -137,6 +137,24 @@ flowchart LR
 - `RESPONSE_RECEIVED` significa protocolo/associação recebida, não atendimento integral;
 - a política de prazo é separada por tipo e copiada integralmente no `Deadline` na criação.
 
+## 5.2. Camada semântica de IA (Fase 4)
+
+```mermaid
+flowchart LR
+  Req["POST /propositions/:id/analyses"] --> PA["Analysis PENDING + outbox AnalysisRequested"]
+  PA --> Q["fila ai-processing"]
+  Q --> W["AiAnalysisPipeline (worker)"]
+  W -->|"1x, se preciso"| EX["Extração REQUEST/INDICATION"]
+  EX --> RI["RequestedItem ativo"]
+  W --> AN["Análise cumulativa por lote de páginas"]
+  AN --> EV["Validação de evidência (documentPageId + excerto real)"]
+  EV --> IT["AnalysisItem + Evidence"]
+  IT --> SUM["Resumo executivo (a partir dos itens, não do PDF bruto)"]
+  SUM --> DONE["Analysis COMPLETED / NEEDS_HUMAN_REVIEW / FAILED"]
+```
+
+A IA nunca é a fonte da verdade: ela produz interpretação estruturada sobre `Proposition`/`Response`/`DocumentPage` já persistidos. `AI_PROCESSING_ENABLED=false` (padrão) faz a criação de análise falhar de forma explícita e recuperável, sem chamada externa. Ver `docs/ANALYSIS_PIPELINE.md` e `docs/AI_EVIDENCE_VALIDATION.md`.
+
 ## 6. Eventos, filas e consistência
 
 Fila BullMQ implementada:
@@ -147,18 +165,21 @@ Fila BullMQ adicionada na Fase 3:
 
 - `deadline-maintenance`: varredura repetível e idempotente de `DUE_SOON`/`OVERDUE`.
 
+Fila BullMQ adicionada na Fase 4:
+
+- `ai-processing`: job único `analyze`, `jobId` determinístico `analysis:{analysisId}:input:{inputHash}`, consumindo o evento outbox `AnalysisRequested`. Executa extração (quando ainda não houver `RequestedItem` ativo), análise cumulativa de respostas e resumo executivo. Ver `docs/ANALYSIS_PIPELINE.md`.
+
 Filas futuras planejadas:
 
 - `document-classification`: tipo e metadados;
 - `document-association`: candidatos e decisão;
-- `analysis`: decomposição, resposta item a item e resumo;
 - `embeddings`: chunks e vetores;
 - `notifications`: chamadas n8n/UAZAPI;
 - `deadlines`: recálculo e alertas.
 
 Eventos de domínio são gravados em uma **transactional outbox** e publicados por worker. Cada consumidor registra idempotência por `eventId` ou chave de negócio. Jobs têm tentativas limitadas, backoff exponencial e estado consultável. Falha externa nunca remove o documento nem duplica mensagem.
 
-Eventos já produzidos: `DocumentUploaded`, `DocumentProcessed`, `PropositionCreated`, `ResponseCreated`, `ResponseAssociated`, `DeadlineCreated`, `DeadlineExtended`, `DeadlineApproaching` e `DeadlineExpired`. Eventos de análise/notificação continuam reservados para fases futuras; nenhum envio externo ocorre na Fase 3.
+Eventos já produzidos: `DocumentUploaded`, `DocumentProcessed`, `PropositionCreated`, `ResponseCreated`, `ResponseAssociated`, `DeadlineCreated`, `DeadlineExtended`, `DeadlineApproaching`, `DeadlineExpired`, `AnalysisRequested`, `AnalysisCompleted`, `AnalysisNeedsReview` e `AnalysisFailed`. WhatsApp e notificações externas continuam reservados para a Fase 5; `AnalysisCompleted` é o ponto de extensão que a Fase 5 consumirá para RAG/chat/WhatsApp sem recriar a lógica de fiscalização.
 
 ## 7. Autorização e escopo de dados
 

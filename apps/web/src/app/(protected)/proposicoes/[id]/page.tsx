@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { use, useCallback, useEffect, useState } from 'react';
 import { apiFetch } from '../../../../lib/api';
+import { AnalysisPanel } from '../../../../components/legislative/analysis-panel';
 import {
   deadlineStatusLabel,
   formatDate,
@@ -198,6 +199,7 @@ export default function PropositionDetailPage({ params }: { params: Promise<{ id
               ) : null}
             </div>
           </section>
+          <AnalysisPanel propositionId={item.id} propositionType={item.type} />
           <section className="card p-6">
             <h2 className="font-semibold">Timeline</h2>
             <ol className="mt-5 space-y-5 border-l border-black/10 pl-5">

@@ -120,7 +120,14 @@ function isBusinessDay(value: string, holidays: Set<string>): boolean {
 }
 
 function assertIsoDate(value: string): void {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(value) || Number.isNaN(Date.parse(`${value}T00:00:00Z`))) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (!match) throw new Error(`Data civil inválida: ${value}`);
+  const [, yearText, monthText, dayText] = match;
+  const year = Number(yearText);
+  const month = Number(monthText);
+  const day = Number(dayText);
+  const daysInMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  if (month < 1 || month > 12 || day < 1 || day > daysInMonth) {
     throw new Error(`Data civil inválida: ${value}`);
   }
 }

@@ -22,6 +22,7 @@ import { DeadlinesModule } from './deadlines/deadlines.module';
 import { HolidaysModule } from './holidays/holidays.module';
 import { PropositionsModule } from './propositions/propositions.module';
 import { ResponsesModule } from './responses/responses.module';
+import { AnalysesModule } from './analyses/analyses.module';
 
 @Module({
   imports: [
@@ -76,6 +77,7 @@ import { ResponsesModule } from './responses/responses.module';
     HolidaysModule,
     PropositionsModule,
     ResponsesModule,
+    AnalysesModule,
   ],
   providers: [
     { provide: APP_GUARD, useClass: ThrottlerGuard },
