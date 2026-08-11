@@ -50,7 +50,7 @@ const schema = z
     WORKER_HEALTH_PORT: z.coerce.number().int().positive().default(3002),
     DEADLINE_SWEEP_INTERVAL_MS: z.coerce.number().int().min(10_000).default(3_600_000),
     PDF_EXTRACTOR_SCRIPT: z.string().optional(),
-    LLM_PROVIDER: z.enum(['anthropic', 'fake']).default('fake'),
+    LLM_PROVIDER: z.enum(['anthropic', 'openai', 'fake']).default('fake'),
     LLM_MODEL: z.string().default('fake-deterministic-v1'),
     LLM_API_KEY: z.string().optional(),
     AI_PROCESSING_ENABLED: booleanValue,
@@ -81,11 +81,11 @@ const schema = z
         message: 'deve ser menor que DOCUMENT_CHUNK_SIZE',
       });
     }
-    if (value.AI_PROCESSING_ENABLED && value.LLM_PROVIDER === 'anthropic' && !value.LLM_API_KEY) {
+    if (value.AI_PROCESSING_ENABLED && value.LLM_PROVIDER !== 'fake' && !value.LLM_API_KEY) {
       context.addIssue({
         code: z.ZodIssueCode.custom,
         path: ['LLM_API_KEY'],
-        message: 'obrigatória quando AI_PROCESSING_ENABLED=true e LLM_PROVIDER=anthropic',
+        message: 'obrigatória quando AI_PROCESSING_ENABLED=true e LLM_PROVIDER não é fake',
       });
     }
     if (

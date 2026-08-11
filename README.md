@@ -23,7 +23,7 @@ Aplicação interna, estruturada e auditável para acompanhar requerimentos, ind
 - pedidos e concessões de prorrogação separados, suspensões, retomadas e concorrência otimista;
 - worker com varredura idempotente de prazos e eventos outbox para vencimento/aproximação;
 - telas operacionais de proposições, respostas, associações, prazos, feriados, timeline e dashboard;
-- abstração `LLMProvider` com `AnthropicProvider` e `FakeLLMProvider` (dublê determinístico para desenvolvimento/CI), escolhidos por `createLLMProvider`;
+- abstração `LLMProvider` com `AnthropicProvider`, `OpenAIProvider` (GPT) e `FakeLLMProvider` (dublê determinístico para desenvolvimento/CI), escolhidos por `createLLMProvider`;
 - extração estruturada de requerimentos/indicações em itens verificáveis, com origem imutável (`DocumentPage`) e versionamento não destrutivo (`RequestedItem.active`);
 - análise cumulativa de respostas item a item, por lote de páginas, com validação determinística de evidência (`documentPageId` + trecho real) e resumo executivo derivado dos itens;
 - `AI_PROCESSING_ENABLED=false` por padrão (fail closed): nenhuma chamada externa ocorre sem ativação operacional explícita;
