@@ -80,7 +80,9 @@ Relação N:N entre proposição e vereador, com papéis `PRIMARY` e `COAUTHOR`.
 
 ### `RequestedItem`
 
-Item atômico de verificação, com sequência única dentro da proposição, texto original, pergunta/ação normalizada, categoria e tipo esperado de resposta. O tipo de proposição determina qual pipeline o cria. Não há merge automático de perguntas distintas.
+Item atômico de verificação, com sequência, texto original, pergunta/ação normalizada, categoria e tipo esperado de resposta. O tipo de proposição determina qual pipeline o cria. Não há merge automático de perguntas distintas.
+
+Desde a Fase 4: `extractionAnalysisId` aponta para a `Analysis` (`REQUEST_EXTRACTION`/`INDICATION_EXTRACTION`) que produziu o item, e `sourceDocumentPageId` referencia a `DocumentPage` imutável de origem — nunca apenas `sourcePage` (número), que permanece como campo de apresentação. `active` permite reextração não destrutiva: uma nova tentativa documental ou versão de prompt marca os itens antigos `active = false` e cria um novo conjunto, sem apagar o histórico. A unicidade de `sequence` por proposição passou a ser um índice parcial sobre `active = true` (ver migration `202608080100_phase4_ai_extraction_analysis`), já que duas gerações de itens podem coexistir.
 
 ### `Document`
 
@@ -128,13 +130,15 @@ Histórico append-only com proposição/método anterior e novo, ator, motivo e 
 
 Uma execução versionada para proposição e, quando aplicável, conjunto/resposta. Guarda tipo, estado, confiança, JSON estruturado de resumo, resultado original, resultado corrente, provider/modelo/prompt/versão e `inputHash`. A chave de cache evita nova chamada equivalente.
 
+Desde a Fase 4, `type` também é usado para as execuções de extração (`REQUEST_EXTRACTION`/`INDICATION_EXTRACTION`), que são análises auxiliares próprias, com seu próprio `inputHash` e AnalysisDocument, distintas da análise de resposta (`REQUEST_RESPONSE`/`INDICATION_RESPONSE`) que o usuário aciona por "Executar análise". `currentResult`/`originalResult` guardam, além dos itens, metadados de cobertura (`responseIds`, `documentIds`, `processingAttemptIds`, `pageCountScanned`, `batchCount`, `analysisCutoff`) para auditoria de "o que foi examinado", inclusive quando a conclusão é ausência de resposta.
+
 ### `AnalysisItem`
 
-Resultado por `RequestedItem`. Como os status diferem entre requerimentos e indicações, o banco guarda um enum superset validado também pelo tipo de análise. Mantém resultado original e corrente, explicação, confiança e campos de revisão (`reviewedBy`, `reviewedAt`, `reviewReason`). Revisão nunca sobrescreve o original.
+Resultado por `RequestedItem`. Como os status diferem entre requerimentos e indicações, o banco guarda um enum superset validado também pelo tipo de análise. Mantém resultado original e corrente, explicação, confiança e campos de revisão (`reviewedBy`, `reviewedAt`, `reviewReason`). Revisão nunca sobrescreve o original; ela só altera os campos `current*` e cria um `AnalysisRevision` append-only.
 
 ### `Evidence`
 
-Liga uma conclusão a `DocumentPage`; guarda trecho curto, motivo e offsets opcionais. A criação valida que o documento foi entrada da análise e que o trecho é compatível com o texto efetivo da página. Evidência sem trecho pode existir quando a página é visual/ilegível, mas deve explicar a limitação.
+Liga uma conclusão a `DocumentPage`; guarda trecho curto, motivo e offsets opcionais. A criação valida que a página pertence à tentativa documental congelada da análise e que o trecho é compatível com o texto efetivo da página (normalização controlada de espaços/quebras). Evidência sem trecho pode existir quando a página é visual/ilegível, mas deve explicar a limitação. Toda validação ocorre no worker (`apps/worker/src/ai/evidence-validator.ts`) depois da resposta do LLM; nenhuma evidência é persistida apenas com base na instrução do prompt.
 
 ### `AnalysisRevision`
 

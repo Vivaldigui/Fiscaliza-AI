@@ -8,6 +8,7 @@ import {
 } from '@fiscaliza/document-processing';
 import { Queue } from 'bullmq';
 import type Redis from 'ioredis';
+import { AI_JOB, AI_QUEUE, aiJobId, type AiQueuePayload } from './ai/ai-queue';
 import type { WorkerConfig } from './config';
 import type { StructuredLogger } from './logger';
 
@@ -20,6 +21,7 @@ interface ClaimedOutboxEvent {
 }
 
 const DOCUMENT_EVENTS = new Set(['DocumentUploaded', 'DocumentReprocessRequested']);
+const AI_EVENTS = new Set(['AnalysisRequested']);
 
 export class OutboxDispatcher {
   private timer?: NodeJS.Timeout;
@@ -28,6 +30,7 @@ export class OutboxDispatcher {
   constructor(
     private readonly prisma: PrismaClient,
     private readonly queue: Queue<DocumentQueuePayload>,
+    private readonly aiQueue: Queue<AiQueuePayload>,
     private readonly redis: Redis,
     private readonly config: WorkerConfig,
     private readonly logger: StructuredLogger,
@@ -94,6 +97,15 @@ export class OutboxDispatcher {
           removeOnComplete: { age: 86_400, count: 1_000 },
           removeOnFail: { age: 7 * 86_400, count: 1_000 },
         });
+      } else if (AI_EVENTS.has(event.event_type)) {
+        const payload = parseAiPayload(event);
+        await this.aiQueue.add(AI_JOB, payload, {
+          jobId: aiJobId(payload),
+          attempts: this.config.AI_QUEUE_ATTEMPTS,
+          backoff: { type: 'exponential', delay: this.config.AI_QUEUE_BACKOFF_MS },
+          removeOnComplete: { age: 86_400, count: 1_000 },
+          removeOnFail: { age: 7 * 86_400, count: 1_000 },
+        });
       } else {
         await this.redis.xadd(
           'fiscaliza:domain-events',
@@ -157,6 +169,21 @@ function parseDocumentPayload(event: ClaimedOutboxEvent): DocumentQueuePayload {
   };
 }
 
+function parseAiPayload(event: ClaimedOutboxEvent): AiQueuePayload {
+  if (!event.payload || typeof event.payload !== 'object' || Array.isArray(event.payload)) {
+    throw new Error('Payload de análise inválido no outbox.');
+  }
+  const payload = event.payload as Record<string, Prisma.JsonValue>;
+  if (typeof payload.analysisId !== 'string' || typeof payload.inputHash !== 'string') {
+    throw new Error('Campos obrigatórios ausentes no evento AnalysisRequested.');
+  }
+  return { outboxEventId: event.id, analysisId: payload.analysisId, inputHash: payload.inputHash };
+}
+
 export function createDocumentQueue(redis: Redis): Queue<DocumentQueuePayload> {
   return new Queue<DocumentQueuePayload>(DOCUMENT_QUEUE, { connection: redis });
+}
+
+export function createAiQueue(redis: Redis): Queue<AiQueuePayload> {
+  return new Queue<AiQueuePayload>(AI_QUEUE, { connection: redis });
 }

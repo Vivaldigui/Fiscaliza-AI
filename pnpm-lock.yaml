@@ -44,6 +44,9 @@ importers:
       '@aws-sdk/s3-request-presigner':
         specifier: 3.864.0
         version: 3.864.0
+      '@fiscaliza/ai':
+        specifier: workspace:*
+        version: link:../../packages/ai
       '@fiscaliza/database':
         specifier: workspace:*
         version: link:../../packages/database
@@ -184,6 +187,9 @@ importers:
       '@aws-sdk/client-s3':
         specifier: 3.864.0
         version: 3.864.0
+      '@fiscaliza/ai':
+        specifier: workspace:*
+        version: link:../../packages/ai
       '@fiscaliza/database':
         specifier: workspace:*
         version: link:../../packages/database

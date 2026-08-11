@@ -451,22 +451,29 @@ model PropositionAuthor {
 }
 
 model RequestedItem {
-  id                   String             @id @default(uuid()) @db.Uuid
-  propositionId        String             @map("proposition_id") @db.Uuid
-  sequence             Int
-  originalText         String             @map("original_text") @db.Text
-  normalizedQuestion   String             @map("normalized_question") @db.Text
-  category             String?            @db.VarChar(100)
-  expectedAnswerType   ExpectedAnswerType @default(UNKNOWN) @map("expected_answer_type")
-  sourcePage           Int?               @map("source_page")
-  extractionConfidence Decimal?           @map("extraction_confidence") @db.Decimal(4, 3)
-  createdAt            DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt            DateTime           @updatedAt @map("updated_at") @db.Timestamptz(3)
-  proposition          Proposition        @relation(fields: [propositionId], references: [id], onDelete: Cascade)
-  analysisItems        AnalysisItem[]
+  id                    String             @id @default(uuid()) @db.Uuid
+  propositionId         String             @map("proposition_id") @db.Uuid
+  extractionAnalysisId  String             @map("extraction_analysis_id") @db.Uuid
+  sequence              Int
+  originalText          String             @map("original_text") @db.Text
+  normalizedQuestion    String             @map("normalized_question") @db.Text
+  category              String?            @db.VarChar(100)
+  expectedAnswerType    ExpectedAnswerType @default(UNKNOWN) @map("expected_answer_type")
+  sourcePage            Int?               @map("source_page")
+  sourceDocumentPageId  String?            @map("source_document_page_id") @db.Uuid
+  extractionConfidence  Decimal?           @map("extraction_confidence") @db.Decimal(4, 3)
+  active                Boolean            @default(true)
+  createdAt             DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt             DateTime           @updatedAt @map("updated_at") @db.Timestamptz(3)
+  proposition           Proposition        @relation(fields: [propositionId], references: [id], onDelete: Cascade)
+  extractionAnalysis    Analysis           @relation("RequestedItemExtraction", fields: [extractionAnalysisId], references: [id], onDelete: Restrict)
+  sourceDocumentPage    DocumentPage?      @relation(fields: [sourceDocumentPageId], references: [id], onDelete: Restrict)
+  analysisItems         AnalysisItem[]
 
-  @@unique([propositionId, sequence])
   @@index([propositionId, category])
+  @@index([propositionId, active])
+  @@index([extractionAnalysisId])
+  @@index([sourceDocumentPageId])
   @@map("requested_items")
 }
 
@@ -540,6 +547,7 @@ model DocumentPage {
   processingAttempt    DocumentProcessingAttempt @relation(fields: [processingAttemptId], references: [id], onDelete: Restrict)
   chunks               DocumentChunk[]
   evidences            Evidence[]
+  sourcedRequestedItems RequestedItem[]
 
   @@unique([processingAttemptId, pageNumber])
   @@index([documentId, pageNumber])
@@ -751,6 +759,7 @@ model Analysis {
   evidences        Evidence[]
   inputDocuments   AnalysisDocument[]
   aiUsage          AIUsage[]
+  extractedItems   RequestedItem[]    @relation("RequestedItemExtraction")
 
   @@index([propositionId, type, createdAt])
   @@index([responseId])

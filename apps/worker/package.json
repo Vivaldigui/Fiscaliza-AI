@@ -8,10 +8,11 @@
     "start": "node dist/main.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "jest --runInBand",
-    "test:integration": "jest --runInBand"
+    "test:integration": "jest --config jest.integration.config.cjs --runInBand"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "3.864.0",
+    "@fiscaliza/ai": "workspace:*",
     "@fiscaliza/database": "workspace:*",
     "@fiscaliza/document-processing": "workspace:*",
     "@fiscaliza/shared": "workspace:*",

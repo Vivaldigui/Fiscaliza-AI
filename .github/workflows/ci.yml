@@ -65,3 +65,5 @@ jobs:
       - run: pnpm --filter @fiscaliza/database db:generate
       - run: pnpm --filter @fiscaliza/api... build
       - run: pnpm --filter @fiscaliza/api test:integration
+      - run: pnpm --filter @fiscaliza/worker... build
+      - run: pnpm --filter @fiscaliza/worker test:integration

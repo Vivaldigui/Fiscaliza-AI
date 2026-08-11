@@ -123,6 +123,16 @@ function config(overrides: Partial<WorkerConfig> = {}): WorkerConfig {
     OUTBOX_BATCH_SIZE: 20,
     WORKER_HEALTH_PORT: 3002,
     DEADLINE_SWEEP_INTERVAL_MS: 60_000,
+    LLM_PROVIDER: 'fake',
+    LLM_MODEL: 'fake-deterministic-v1',
+    AI_PROCESSING_ENABLED: false,
+    AI_REQUEST_TIMEOUT_MS: 60_000,
+    AI_MAX_RETRIES: 2,
+    AI_JOB_CONCURRENCY: 1,
+    AI_MAX_PAGES_PER_BATCH: 20,
+    AI_MAX_INPUT_CHARS: 60_000,
+    AI_QUEUE_ATTEMPTS: 3,
+    AI_QUEUE_BACKOFF_MS: 10_000,
     ...overrides,
   };
 }

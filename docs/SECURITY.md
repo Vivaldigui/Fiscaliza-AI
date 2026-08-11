@@ -42,13 +42,14 @@ Vínculos de documentos exigem `securityStatus = CLEAN` e `processingStatus = CO
 
 ## 5. Prompt injection e IA
 
-- Documento é delimitado e tratado como dado não confiável.
-- Prompt de sistema proíbe obedecer instruções do documento.
+- Documento é delimitado (`[PAGE id="..." document="..." page="..."]`) e tratado como dado não confiável; todo prompt de sistema declara que instruções encontradas no documento nunca substituem as instruções do sistema.
 - Modelo não possui ferramentas administrativas, rede arbitrária, banco ou segredos.
-- Saída é JSON estrito validado; IDs/páginas/evidências têm verificação determinística.
-- RAG usa allowlist de IDs de documento derivada de autorização.
-- Não persistir chain-of-thought; apenas resultado, explicação ao usuário, metadados e uso.
-- Conteúdo sensível enviado ao provider deve ser coberto por contrato e política administrativa; opção futura de provider regional/on-premise.
+- Saída é JSON estrito (`.strict()`) validado por Zod; o worker resolve `documentPageId` apenas contra as páginas que ele mesmo enviou no contexto daquela chamada — um ID retornado que não pertença a esse conjunto é descartado, nunca persistido (ver `docs/AI_EVIDENCE_VALIDATION.md`).
+- `AI_PROCESSING_ENABLED=false` por padrão: nenhum PDF é enviado a um provider externo sem essa autorização operacional explícita. Uma solicitação de análise com IA desabilitada falha de forma clara (`503`) e recuperável; nada é processado silenciosamente.
+- `LLM_PROVIDER=fake` (o double determinístico usado em CI/dev) é recusado pela validação de ambiente do worker quando `NODE_ENV=production` e `AI_PROCESSING_ENABLED=true`.
+- RAG usa allowlist de IDs de documento derivada de autorização (Fase 5).
+- Não persistir chain-of-thought; apenas resultado, explicação ao usuário, metadados e uso. Os prompts de análise/resumo pedem explicitamente que o modelo não descreva raciocínio interno.
+- Conteúdo sensível enviado ao provider deve ser coberto por contrato e política administrativa; opção futura de provider regional/on-premise. Documentos reais da Câmara (`data/proposicoes-itanhandu/`, ignorado pelo Git) não devem ser enviados a um provider externo sem decisão institucional prévia sobre LGPD e classificação — a validação da Fase 4 usou exclusivamente fixtures sintéticas.
 
 ## 6. API e web
 

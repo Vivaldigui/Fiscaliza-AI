@@ -1,6 +1,8 @@
 import type { DeadlinePolicy } from '@fiscaliza/shared';
 import { calculateDueDate, countSuspendedDays, dateInTimeZone } from './deadline-calculator';
 
+const invalidDates = ['2026-02-31', '2026-04-31', '2026-13-01', '2026-00-10', '2026-01-00'];
+
 const policy: DeadlinePolicy = {
   policyVersion: 1,
   initialResponseDays: 15,
@@ -56,5 +58,16 @@ describe('deadline calculator', () => {
     expect(dateInTimeZone(new Date('2026-08-08T01:30:00Z'), 'America/Sao_Paulo')).toBe(
       '2026-08-07',
     );
+  });
+
+  it('rejeita datas civis impossíveis como 31/02', () => {
+    for (const invalid of invalidDates) {
+      expect(() => calculateDueDate(invalid, 15, policy, [])).toThrow('Data civil inválida');
+    }
+  });
+
+  it('aceita 29/02 em ano bissexto e rejeita em ano comum', () => {
+    expect(calculateDueDate('2028-02-29', 1, policy, []).dueDate).toBe('2028-03-01');
+    expect(() => calculateDueDate('2026-02-29', 1, policy, [])).toThrow('Data civil inválida');
   });
 });

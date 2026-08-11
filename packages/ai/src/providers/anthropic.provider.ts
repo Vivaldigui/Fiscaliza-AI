@@ -1,11 +1,12 @@
 import Anthropic from '@anthropic-ai/sdk';
 import type { z } from 'zod';
-import type {
-  LLMProvider,
-  LLMResult,
-  LLMTextResult,
-  StructuredGenerationRequest,
-  TextGenerationRequest,
+import {
+  type LLMProvider,
+  type LLMResult,
+  type LLMTextResult,
+  StructuredOutputValidationError,
+  type StructuredGenerationRequest,
+  type TextGenerationRequest,
 } from '../llm-provider';
 
 export interface AnthropicProviderConfig {
@@ -36,9 +37,24 @@ export class AnthropicProvider implements LLMProvider {
       prompt: `${request.prompt}\n\nRetorne somente JSON válido conforme este contrato:\n${request.schemaDescription}`,
     });
     const jsonText = extractJson(result.text);
-    const parsed: unknown = JSON.parse(jsonText);
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(jsonText);
+    } catch (error) {
+      throw new StructuredOutputValidationError(
+        `JSON inválido retornado pelo provider: ${error instanceof Error ? error.message : 'erro desconhecido'}`,
+        jsonText,
+      );
+    }
+    const validation = request.schema.safeParse(parsed);
+    if (!validation.success) {
+      throw new StructuredOutputValidationError(
+        `Saída não corresponde ao schema esperado: ${validation.error.message}`,
+        jsonText,
+      );
+    }
     return {
-      data: request.schema.parse(parsed) as z.infer<TSchema>,
+      data: validation.data as z.infer<TSchema>,
       usage: result.usage,
       provider: this.name,
       model: this.model,
