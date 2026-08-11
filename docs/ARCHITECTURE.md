@@ -233,7 +233,7 @@ PostgreSQL é a fonte de verdade. MinIO requer versionamento/backup; Redis é re
 | Prazo             | política por tipo + snapshot por registro                    | mudança administrativa não altera histórico                 |
 | Concorrência      | constraints + versão otimista em resposta/prazo              | evita dupla associação/prorrogação                          |
 | Derivados PDF     | versionados por `DocumentProcessingAttempt`                  | evidência histórica nunca aponta página substituída         |
-| IA                | interface `LLMProvider`; Anthropic primeiro                  | troca de provider/modelo sem regra no SDK                   |
+| IA                | interface `LLMProvider`; Anthropic e OpenAI                  | troca de provider/modelo sem regra no SDK                   |
 | Datas             | `timestamptz` em UTC + timezone IANA configurado             | cálculo local correto e persistência inequívoca             |
 
 ## 12. Árvore proposta

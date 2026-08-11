@@ -1,6 +1,7 @@
 import type { LLMProvider } from './llm-provider';
 import { AnthropicProvider } from './providers/anthropic.provider';
 import { FakeLLMProvider } from './providers/fake.provider';
+import { OpenAIProvider } from './providers/openai.provider';
 
 export interface LLMProviderFactoryConfig {
   provider: string;
@@ -11,7 +12,7 @@ export interface LLMProviderFactoryConfig {
 
 /**
  * `LLM_PROVIDER=fake` is only meant for local development and CI, never for
- * a real analysis. Domain code never imports the Anthropic SDK directly;
+ * a real analysis. Domain code never imports a provider SDK directly;
  * it depends on `LLMProvider` and receives whichever implementation this
  * factory returns.
  */
@@ -20,6 +21,15 @@ export function createLLMProvider(config: LLMProviderFactoryConfig): LLMProvider
     case 'anthropic':
       if (!config.apiKey) throw new Error('LLM_API_KEY não configurada para o provider anthropic.');
       return new AnthropicProvider({
+        apiKey: config.apiKey,
+        model: config.model,
+        ...(config.defaultMaxTokens !== undefined
+          ? { defaultMaxTokens: config.defaultMaxTokens }
+          : {}),
+      });
+    case 'openai':
+      if (!config.apiKey) throw new Error('LLM_API_KEY não configurada para o provider openai.');
+      return new OpenAIProvider({
         apiKey: config.apiKey,
         model: config.model,
         ...(config.defaultMaxTokens !== undefined

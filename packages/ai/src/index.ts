@@ -1,6 +1,7 @@
 export * from './llm-provider';
 export * from './providers/anthropic.provider';
 export * from './providers/fake.provider';
+export * from './providers/openai.provider';
 export * from './provider-factory';
 export * from './input-hash';
 export * from './versions';
