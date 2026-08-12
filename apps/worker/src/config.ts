@@ -79,6 +79,22 @@ const schema = z
     CONVERSATION_ANSWER_MAX_RETRIES: z.coerce.number().int().min(0).max(5).default(2),
     CONVERSATION_QUEUE_ATTEMPTS: z.coerce.number().int().min(1).max(10).default(3),
     CONVERSATION_QUEUE_BACKOFF_MS: z.coerce.number().int().min(100).default(10_000),
+    WHATSAPP_ENABLED: booleanValue,
+    WHATSAPP_SESSION_TTL_SECONDS: z.coerce.number().int().min(60).max(604_800).default(3_600),
+    N8N_WEBHOOK_BASE_URL: z.string().url().optional(),
+    N8N_WEBHOOK_SECRET: z.string().min(16).optional(),
+    N8N_REQUEST_TIMEOUT_MS: z.coerce.number().int().min(1_000).default(10_000),
+    NOTIFICATION_QUEUE_ATTEMPTS: z.coerce.number().int().min(1).max(10).default(3),
+    NOTIFICATION_QUEUE_BACKOFF_MS: z.coerce.number().int().min(100).default(10_000),
+    NOTIFICATION_WORKER_CONCURRENCY: z.coerce.number().int().min(1).max(16).default(2),
+    NOTIFICATION_RECONCILIATION_INTERVAL_MS: z.coerce.number().int().min(10_000).default(60_000),
+    NOTIFICATION_PROCESSING_STALE_MS: z.coerce
+      .number()
+      .int()
+      .min(60_000)
+      .default(15 * 60_000),
+    RESPONSE_NOTIFICATIONS_ENABLED: booleanValue,
+    DEADLINE_NOTIFICATIONS_ENABLED: booleanValue,
   })
   .superRefine((value, context) => {
     if (
@@ -151,6 +167,45 @@ const schema = z
         code: z.ZodIssueCode.custom,
         path: ['CHAT_ENABLED'],
         message: 'exige EMBEDDINGS_ENABLED=true (o retrieval autorizado usa os embeddings)',
+      });
+    }
+    if (value.WHATSAPP_ENABLED && !value.AI_PROCESSING_ENABLED) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['WHATSAPP_ENABLED'],
+        message: 'exige AI_PROCESSING_ENABLED=true (as respostas usam o modelo de chat)',
+      });
+    }
+    if (value.WHATSAPP_ENABLED && !value.EMBEDDINGS_ENABLED) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['WHATSAPP_ENABLED'],
+        message: 'exige EMBEDDINGS_ENABLED=true (o retrieval autorizado usa os embeddings)',
+      });
+    }
+    if (value.WHATSAPP_ENABLED && !value.N8N_WEBHOOK_SECRET) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['N8N_WEBHOOK_SECRET'],
+        message: 'obrigatório quando WHATSAPP_ENABLED=true',
+      });
+    }
+    if (value.WHATSAPP_ENABLED && !value.N8N_WEBHOOK_BASE_URL) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['N8N_WEBHOOK_BASE_URL'],
+        message: 'obrigatória quando WHATSAPP_ENABLED=true',
+      });
+    }
+    if (
+      value.NODE_ENV === 'production' &&
+      value.WHATSAPP_ENABLED &&
+      value.EMBEDDINGS_PROVIDER === 'fake'
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['EMBEDDINGS_PROVIDER'],
+        message: 'provider de embeddings "fake" não pode ficar ativo em produção',
       });
     }
   });

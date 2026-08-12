@@ -66,7 +66,7 @@ Perfil político/administrativo opcionalmente ligado a um `User`. Guarda nome de
 
 ### `WhatsappIdentity`
 
-Número E.164 normalizado, instância UAZAPI, estado de verificação e vínculo com vereador. `(phoneNumber, instance)` é único. Número desconhecido não cria usuário automaticamente.
+Número E.164 normalizado, instância UAZAPI, estado de verificação e vínculo com vereador. `(phoneNumber, instance)` é único. Número desconhecido não cria usuário automaticamente. A Fase 5B usa a identidade como barreira de autorização do WhatsApp: somente identidade ativa **e** verificada, com vereador ativo e usuário `ACTIVE`, pode disparar consulta. O telefone completo nunca é exposto em logs, auditoria, payloads ou no frontend (máscara + hash).
 
 ## 4. Proposições e documentos
 
@@ -174,15 +174,19 @@ Evento histórico com início, fim, motivo, quem suspendeu/retomou e vencimento 
 
 Conversa web (Fase 5A), associada ao usuário e opcionalmente a uma proposição. A `Conversation` guarda canal (`WEB`), título opcional e `lastInteractionAt`; a mensagem guarda papel (`USER`/`ASSISTANT`), texto destinado ao usuário, `sources` JSON (somente páginas validadas pelo worker: `documentId`, `documentPageId`, `pageNumber`), `status`, `provider`, `model`, `answerVersion`, `embeddingVersion`, tokens de entrada/saída, latência, `failureReason` e `inputHash` — a unicidade `(conversationId, role, inputHash)` impede duplicação idempotente da mesma pergunta. Não guardam raciocínio interno do modelo.
 
-Sessão curta (`activePropositionId`, `conversationId`, `lastInteraction`) fica no Redis; a conversa durável fica no PostgreSQL. `AIUsage` pode apontar para a mensagem geradora via `conversationMessageId`. O inbound WhatsApp (`InboundMessage`) permanece na Fase 5B.
+Sessão curta (`activePropositionId`, `conversationId`, `lastInteraction`) fica no Redis (`whatsapp:session:{instance}:{identityId}`); a conversa durável fica no PostgreSQL. `AIUsage` pode apontar para a mensagem geradora via `conversationMessageId`. Na Fase 5B, `Conversation` ganhou `whatsappIdentityId` (vínculo auditável do canal WhatsApp) e o `InboundMessage` vinculou-se a identidade, conversa e mensagem gerada.
 
 ### `InboundMessage`
 
-Envelope WhatsApp com `messageId` único por instância, hash do payload, estado e resposta produzida. É a barreira de idempotência.
+Envelope WhatsApp com `messageId` único por instância, hash do telefone e do payload, estado e resposta produzida. É a barreira de idempotência: `(instance, messageId)` único e `payloadHash` detecta o mesmo ID com conteúdo diferente (409). Desde a Fase 5B guarda `identityId`, `conversationId` e `conversationMessageId` para auditoria do fluxo.
 
 ### `Notification`
 
-Destinatário, canal, template, payload, estado, tentativas e IDs externos. Criada somente depois de `ResponseAnalysisCompleted`. Entrega é assíncrona e repetível sem duplicação externa quando o provedor suporta idempotency key.
+Destinatário de canal (User via `recipientId` ou `WhatsappIdentity` via `identityId`), `type` (`WHATSAPP_CONVERSATION_REPLY`, `RESPONSE_ANALYSIS_COMPLETED`, `DEADLINE_APPROACHING`, `DEADLINE_EXPIRED`), canal, template + `templateVersion`, payload mínimo, `idempotencyKey` único, status, tentativas, `externalMessageId` e timestamps. `destinationPhone` é usado apenas para respostas neutras a números sem identidade. Criada somente depois de `ResponseAnalysisCompleted` (análise de resposta `COMPLETED`) ou dos eventos de prazo. Entrega é assíncrona e repetível sem duplicação externa quando o provedor suporta idempotency key.
+
+### `NotificationDeliveryAttempt`
+
+Histórico append-only de cada tentativa de entrega: `notificationId`, número da tentativa (único por notificação), `status`, `provider`, `externalMessageId` e erro sanitizado. Nunca se depende apenas do `lastError` sobrescrito.
 
 ## 9. Configuração, auditoria e eventos
 
@@ -223,6 +227,7 @@ Outbox transacional para publicação confiável; consumidor registra evento pro
 - versões otimistas em `Response` e `Deadline` evitam escrita concorrente perdida;
 - unique em `RequestedItem(propositionId, sequence)`;
 - unique em `InboundMessage(instance, messageId)`;
+- unique em `Notification.idempotencyKey` e em `NotificationDeliveryAttempt(notificationId, attempt)`;
 - unique em `Analysis.inputHash` por operação/versão quando reutilizável;
 - índices em estados de processamento, prazos atuais, autoria, protocolo e timestamps;
 - índice HNSW de pgvector (`document_chunks_embedding_hnsw_idx`, `vector_cosine_ops`) criado na Fase 5A; IVFFlat permanece alternativa futura para volume;

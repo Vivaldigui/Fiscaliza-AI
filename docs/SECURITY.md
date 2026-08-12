@@ -65,9 +65,14 @@ Vínculos de documentos exigem `securityStatus = CLEAN` e `processingStatus = CO
 
 ## 7. Integrações e segredos
 
-Segredos (`LLM_API_KEY`, `UAZAPI_TOKEN`, `MINIO_SECRET_KEY`, `DATABASE_URL`, JWT/refresh) ficam em variáveis injetadas/secret manager, nunca no Git, bundle web, logs ou payload de evento. `.env.example` contém placeholders.
+Segredos (`LLM_API_KEY`, `UAZAPI_TOKEN`, `MINIO_SECRET_KEY`, `DATABASE_URL`, JWT/refresh, `N8N_WEBHOOK_SECRET`) ficam em variáveis injetadas/secret manager, nunca no Git, bundle web, logs ou payload de evento. `.env.example` contém placeholders. `UAZAPI_TOKEN` vive apenas no n8n; o backend não a conhece.
 
-Webhooks usam TLS, segredo/assinatura, comparação constante, janela de timestamp e idempotência. Egress deve ser restrito aos endpoints de provider configurados em produção.
+Webhooks usam TLS, assinatura HMAC-SHA256 sobre `timestamp.body`, comparação constant-time, janela contra replay e idempotência — nas duas direções:
+
+- n8n → backend (`POST /api/v1/integrations/whatsapp/inbound` e `delivery-callback`): `IntegrationSignatureGuard` valida `x-fiscaliza-timestamp`/`x-fiscaliza-signature`, limite de corpo e `WHATSAPP_ENABLED`;
+- backend → n8n (entrega): `N8nWebhookDeliveryProvider` assina o mesmo esquema, com timeout e retries limitados.
+
+Números de telefone são normalizados para E.164, persistidos apenas como hash e mascarados em logs/auditoria/API/painel. Egress deve ser restrito aos endpoints de provider configurados em produção.
 
 ## 8. Auditoria
 

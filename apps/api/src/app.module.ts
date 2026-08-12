@@ -24,6 +24,8 @@ import { PropositionsModule } from './propositions/propositions.module';
 import { ResponsesModule } from './responses/responses.module';
 import { AnalysesModule } from './analyses/analyses.module';
 import { ConversationsModule } from './conversations/conversations.module';
+import { NotificationsModule } from './notifications/notifications.module';
+import { WhatsappModule } from './integrations/whatsapp/whatsapp.module';
 
 @Module({
   imports: [
@@ -80,6 +82,8 @@ import { ConversationsModule } from './conversations/conversations.module';
     ResponsesModule,
     AnalysesModule,
     ConversationsModule,
+    NotificationsModule,
+    WhatsappModule,
   ],
   providers: [
     { provide: APP_GUARD, useClass: ThrottlerGuard },

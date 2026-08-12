@@ -55,7 +55,7 @@ Contrato canônico:
 }
 ```
 
-O endpoint exige autenticação de integração e validação de timestamp/assinatura conforme capacidade da UAZAPI/n8n. `(instance, messageId)` é idempotente.
+O endpoint exige autenticação de integração (HMAC-SHA256 sobre `timestamp.body`, comparação constant-time, janela contra replay) e validação de timestamp/assinatura. `(instance, messageId)` é idempotente: o mesmo ID com o mesmo `payloadHash` retorna o mesmo resultado; o mesmo ID com payload diferente gera `409` e auditoria. O envelope guarda apenas `phoneHash` e `payloadHash`.
 
 ## 3. Identidade e sessão
 
@@ -126,19 +126,24 @@ O backend calcula prazo/estado e emite `DeadlineApproaching` ou `DeadlineExpired
 
 ## 8. Workflows n8n previstos
 
-Em `infra/n8n` serão mantidos exemplos importáveis e payloads para:
+Em `infra/n8n` são mantidos exemplos importáveis (sem credenciais):
 
-1. `whatsapp-inbound`: Webhook UAZAPI → validação/normalização → API → UAZAPI.
-2. `response-analysis-notification`: webhook do backend → UAZAPI → callback de status.
-3. `deadline-alert`: webhook do backend → UAZAPI → callback de status.
+1. `whatsapp-inbound.workflow.example.json`: UAZAPI → normalização → `POST /api/v1/integrations/whatsapp/inbound` (assinado) → resposta ao webhook.
+2. `notification-delivery.workflow.example.json` (consolidado): webhook assinado do backend (`/notification-delivery`) → UAZAPI (credential store) com `idempotencyKey` → `POST /integrations/whatsapp/delivery-callback` com `SENT`/`externalMessageId` → `202`. Atende respostas de conversa, análises de resposta e alertas de prazo.
+3. `response-analysis-notification.workflow.example.json` e `deadline-alert.workflow.example.json`: referências de filtro por `notificationType` que delegam ao fluxo consolidado.
 
-Credenciais ficam no credential store do n8n, nunca nos JSONs versionados.
+Credenciais ficam no credential store do n8n, nunca nos JSONs versionados. A `UAZAPI_TOKEN` não existe no backend; o n8n a injeta no env/credenciais.
+
+## 8.1. Validação do contrato externo
+
+O contrato real da UAZAPI **não foi validado neste ambiente** (sem credenciais). O backend foi implementado e testado contra fixtures sintéticas e contra os contratos documentados nos workflows de exemplo; **a integração externa real não é declarada validada** e exige smoke test com a instalação real antes de produção (ver `docs/PHASE_5B_REPORT.md`).
 
 ## 9. Falhas e segurança
 
 - Timeout da IA retorna confirmação de processamento quando apropriado; mensagem permanece registrada.
-- Falha de UAZAPI mantém `Notification` pendente e usa retry com backoff.
+- Falha de UAZAPI mantém `Notification` pendente e usa retry com backoff limitado (ver `docs/NOTIFICATION_DELIVERY.md`).
+- Callbacks de status validam transições: DELIVERED é terminal e um callback atrasado nunca o regride para SENT/FAILED.
 - Payloads têm limite de tamanho; anexos recebidos não são ingeridos pelo endpoint textual sem fluxo explícito.
-- Logs redigem telefone (últimos dígitos apenas), texto sensível e tokens.
-- Rate limit por integração, identidade e IP reduz abuso.
+- Logs redigem telefone (máscara), texto sensível e tokens; nenhum telefone completo ou payload integral entra em auditoria/API/painel.
+- Rate limit por integração, telefone e IP reduz abuso.
 - Comandos que alterem dados exigirão confirmação/autorização explícita; o MVP do WhatsApp é prioritariamente de consulta.

@@ -1,6 +1,6 @@
 # Fiscaliza AI
 
-Aplicação interna, estruturada e auditável para acompanhar requerimentos, indicações, respostas, evidências e prazos de uma Câmara Municipal. Esta entrega implementa as **Fases 4 (IA estruturada, evidências e revisão humana)** e **5A (RAG web autorizado com embeddings)** sobre a camada legislativa determinística das Fases 1–3.
+Aplicação interna, estruturada e auditável para acompanhar requerimentos, indicações, respostas, evidências e prazos de uma Câmara Municipal. Esta entrega implementa as **Fases 4 (IA estruturada, evidências e revisão humana)**, **5A (RAG web autorizado com embeddings)** e **5B (WhatsApp, notificações e alertas de prazo)** sobre a camada legislativa determinística das Fases 1–3.
 
 ## O que já está implementado
 
@@ -35,7 +35,20 @@ Aplicação interna, estruturada e auditável para acompanhar requerimentos, ind
 - retrieval autorizado: perguntas estruturadas resolvidas no PostgreSQL antes de qualquer RAG; o conjunto de documentos autorizados da proposição (anexos + respostas oficiais) é aplicado no SQL antes do vetor `ORDER BY`/`LIMIT` — nunca há "busca global e filtro em memória";
 - conversa web (`` `/conversas` ``) com fontes clicáveis (URL assinada do PDF na página exata), resposta explícita "sem evidência suficiente", persistência por mensagem de provider/modelo/tokens/latência/versões e sessão Redis temporária.
 
-Embeddings, RAG autorizado e a conversa web foram implementados na **Fase 5A**; WhatsApp end-to-end, notificações externas e alertas de prazo permanecem na Fase 5B de `docs/IMPLEMENTATION_PLAN.md`. A IA não afirma conclusão jurídica — apenas descreve fatos documentais rastreáveis a página e trecho.
+Na **Fase 5B**, adicionamos:
+
+- inbound WhatsApp via n8n/UAZAPI (`POST /api/v1/integrations/whatsapp/inbound`) com autenticação HMAC + timestamp/replay, limite de corpo, rate limit por telefone e idempotência `(instance, messageId)` por `payloadHash`;
+- telefone normalizado para E.164, apenas hash persistido, telefones mascarados em logs/API/painel;
+- identidade `WhatsappIdentity → Councilor → User` com deny-by-default: número desconhecido, identidade inativa/não verificada ou usuário não ativo recebem resposta neutra **sem busca, RAG ou LLM** (auditado);
+- sessão temporária no Redis (`whatsapp:session:{instance}:{identityId}`) com TTL configurável;
+- seleção de contexto em linguagem natural ("requerimento 38/2026") restrita às proposições autorizadas; ambiguidade vira pergunta de esclarecimento; coautores autorizados acessam a mesma proposição;
+- reutilização integral do pipeline de conversa/RAG da Fase 5A para WhatsApp, com revalidação de identidade/autorização no processamento;
+- resposta assíncrona entregue pelo mesmo pipeline de notificações (n8n assinado → UAZAPI → callback de status com validação de transições);
+- notificação de autores após `ResponseAnalysisCompleted` (apenas análises de resposta `COMPLETED`, com contagem real de itens), alertas de prazo `DeadlineApproaching`/`DeadlineExpired` idempotentes;
+- histórico append-only de tentativas (`NotificationDeliveryAttempt`), retries com backoff limitado, reconciliação, retry/cancel manuais autorizados e painel operacional em `/whatsapp` e `/notificacoes`;
+- workflows n8n importáveis em `infra/n8n/workflows/*.example.json` sem credenciais.
+
+Embeddings, RAG autorizado e a conversa web foram implementados na **Fase 5A**; WhatsApp end-to-end, notificações externas e alertas de prazo na **Fase 5B** de `docs/IMPLEMENTATION_PLAN.md`. A IA não afirma conclusão jurídica — apenas descreve fatos documentais rastreáveis a página e trecho.
 
 ## Pré-requisitos
 
@@ -101,7 +114,7 @@ pnpm test
 pnpm build
 ```
 
-O CI também valida Prisma, todas as migrations em PostgreSQL limpo e os testes de integração das Fases 3, 4 e 5A (estes últimos contra PostgreSQL/pgvector real). Todas as fixtures são sintéticas; nenhum teste depende de credencial real de LLM ou de embeddings (`FakeLLMProvider`/`FakeEmbeddingProvider`), e nenhum documento real é usado como fixture. A validação está registrada em `docs/PHASE_3_REPORT.md`, `docs/PHASE_4_REPORT.md` e `docs/PHASE_5A_REPORT.md`.
+O CI também valida Prisma, todas as migrations em PostgreSQL limpo e os testes de integração das Fases 3, 4, 5A e 5B (estes últimos contra PostgreSQL/pgvector real). Todas as fixtures são sintéticas; nenhum teste depende de credencial real de LLM, embeddings, n8n ou UAZAPI (`FakeLLMProvider`/`FakeEmbeddingProvider` e fakes explícitos de entrega), e nenhum documento real é usado como fixture. A validação está registrada em `docs/PHASE_3_REPORT.md`, `docs/PHASE_4_REPORT.md`, `docs/PHASE_5A_REPORT.md` e `docs/PHASE_5B_REPORT.md`.
 
 ## Bootstrap e seed
 
@@ -121,6 +134,7 @@ Configurações seed (todas editáveis e auditáveis): políticas de prazo por `
 - `docs/ANALYSIS_PIPELINE.md`
 - `docs/AI_EVIDENCE_VALIDATION.md`
 - `docs/WHATSAPP_FLOW.md`
+- `docs/NOTIFICATION_DELIVERY.md`
 - `docs/SECURITY.md`
 - `docs/IMPLEMENTATION_PLAN.md`
 - `docs/DOCUMENT_PIPELINE.md`
@@ -133,5 +147,6 @@ Configurações seed (todas editáveis e auditáveis): políticas de prazo por `
 - `docs/PHASE_3_REPORT.md`
 - `docs/PHASE_4_REPORT.md`
 - `docs/PHASE_5A_REPORT.md`
+- `docs/PHASE_5B_REPORT.md`
 
-Antes de produção, trate como bloqueadores o checklist de segurança, a política LGPD, a regra administrativa exata de contagem, o antivírus/quarentena, o contrato real da UAZAPI, os testes de restauração e a aprovação institucional para envio de documentos reais a um provider de IA externo.
+Antes de produção, trate como bloqueadores o checklist de segurança, a política LGPD, a regra administrativa exata de contagem, o antivírus/quarentena, o contrato real da UAZAPI (e o smoke test do n8n/UAZAPI — pendente, ver `docs/PHASE_5B_REPORT.md`), os testes de restauração e a aprovação institucional para envio de documentos reais a um provider de IA externo.

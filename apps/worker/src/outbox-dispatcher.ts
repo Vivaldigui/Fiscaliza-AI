@@ -23,6 +23,19 @@ import {
 } from './conversation/conversation-queue';
 import type { WorkerConfig } from './config';
 import type { StructuredLogger } from './logger';
+import {
+  NOTIFICATION_FACTORY_JOB,
+  NOTIFICATION_FACTORY_QUEUE,
+  deadlineJobId,
+  responseAnalysisJobId,
+  type NotificationFactoryPayload,
+} from './notification/notification-factory-queue';
+import {
+  NOTIFICATION_JOB,
+  NOTIFICATION_QUEUE,
+  notificationJobId,
+  type NotificationQueuePayload,
+} from './notification/notification-queue';
 
 interface ClaimedOutboxEvent {
   id: string;
@@ -36,6 +49,9 @@ const DOCUMENT_EVENTS = new Set(['DocumentUploaded', 'DocumentReprocessRequested
 const AI_EVENTS = new Set(['AnalysisRequested']);
 const EMBEDDING_EVENTS = new Set(['DocumentProcessed']);
 const CONVERSATION_EVENTS = new Set(['ConversationAnswerRequested']);
+const NOTIFICATION_EVENTS = new Set(['NotificationCreated', 'NotificationRetryRequested']);
+const RESPONSE_ANALYSIS_EVENTS = new Set(['ResponseAnalysisCompleted']);
+const DEADLINE_EVENTS = new Set(['DeadlineApproaching', 'DeadlineExpired']);
 
 export class OutboxDispatcher {
   private timer?: NodeJS.Timeout;
@@ -47,6 +63,8 @@ export class OutboxDispatcher {
     private readonly aiQueue: Queue<AiQueuePayload>,
     private readonly embeddingsQueue: Queue<EmbeddingsQueuePayload>,
     private readonly conversationQueue: Queue<ConversationQueuePayload>,
+    private readonly notificationQueue: Queue<NotificationQueuePayload>,
+    private readonly notificationFactoryQueue: Queue<NotificationFactoryPayload>,
     private readonly redis: Redis,
     private readonly config: WorkerConfig,
     private readonly logger: StructuredLogger,
@@ -138,11 +156,48 @@ export class OutboxDispatcher {
         }
       } else if (CONVERSATION_EVENTS.has(event.event_type)) {
         const payload = parseConversationPayload(event);
-        if (this.config.CHAT_ENABLED) {
+        if (this.config.CHAT_ENABLED || this.config.WHATSAPP_ENABLED) {
           await this.conversationQueue.add(CONVERSATION_JOB, payload, {
             jobId: conversationJobId(payload),
             attempts: this.config.CONVERSATION_QUEUE_ATTEMPTS,
             backoff: { type: 'exponential', delay: this.config.CONVERSATION_QUEUE_BACKOFF_MS },
+            removeOnComplete: { age: 86_400, count: 1_000 },
+            removeOnFail: { age: 7 * 86_400, count: 1_000 },
+          });
+        }
+      } else if (NOTIFICATION_EVENTS.has(event.event_type)) {
+        const payload = parseNotificationPayload(event);
+        if (this.config.WHATSAPP_ENABLED) {
+          await this.notificationQueue.add(NOTIFICATION_JOB, payload, {
+            jobId: notificationJobId(payload),
+            attempts: this.config.NOTIFICATION_QUEUE_ATTEMPTS,
+            backoff: { type: 'exponential', delay: this.config.NOTIFICATION_QUEUE_BACKOFF_MS },
+            removeOnComplete: { age: 86_400, count: 1_000 },
+            removeOnFail: { age: 7 * 86_400, count: 1_000 },
+          });
+        }
+      } else if (RESPONSE_ANALYSIS_EVENTS.has(event.event_type)) {
+        const payload = parseResponseAnalysisPayload(event);
+        if (this.config.RESPONSE_NOTIFICATIONS_ENABLED && this.config.WHATSAPP_ENABLED) {
+          await this.notificationFactoryQueue.add(NOTIFICATION_FACTORY_JOB, payload, {
+            jobId: responseAnalysisJobId({ analysisId: payload.analysisId! }),
+            attempts: this.config.NOTIFICATION_QUEUE_ATTEMPTS,
+            backoff: { type: 'exponential', delay: this.config.NOTIFICATION_QUEUE_BACKOFF_MS },
+            removeOnComplete: { age: 86_400, count: 1_000 },
+            removeOnFail: { age: 7 * 86_400, count: 1_000 },
+          });
+        }
+      } else if (DEADLINE_EVENTS.has(event.event_type)) {
+        const payload = parseDeadlinePayload(event);
+        if (this.config.DEADLINE_NOTIFICATIONS_ENABLED && this.config.WHATSAPP_ENABLED) {
+          await this.notificationFactoryQueue.add(NOTIFICATION_FACTORY_JOB, payload, {
+            jobId: deadlineJobId({
+              deadlineId: payload.deadlineId!,
+              eventType: payload.eventType,
+              dueDate: payload.dueDate,
+            }),
+            attempts: this.config.NOTIFICATION_QUEUE_ATTEMPTS,
+            backoff: { type: 'exponential', delay: this.config.NOTIFICATION_QUEUE_BACKOFF_MS },
             removeOnComplete: { age: 86_400, count: 1_000 },
             removeOnFail: { age: 7 * 86_400, count: 1_000 },
           });
@@ -237,6 +292,14 @@ export function createConversationQueue(redis: Redis): Queue<ConversationQueuePa
   return new Queue<ConversationQueuePayload>(CONVERSATION_QUEUE, { connection: redis });
 }
 
+export function createNotificationQueue(redis: Redis): Queue<NotificationQueuePayload> {
+  return new Queue<NotificationQueuePayload>(NOTIFICATION_QUEUE, { connection: redis });
+}
+
+export function createNotificationFactoryQueue(redis: Redis): Queue<NotificationFactoryPayload> {
+  return new Queue<NotificationFactoryPayload>(NOTIFICATION_FACTORY_QUEUE, { connection: redis });
+}
+
 function parseConversationPayload(event: ClaimedOutboxEvent): ConversationQueuePayload {
   if (!event.payload || typeof event.payload !== 'object' || Array.isArray(event.payload)) {
     throw new Error('Payload de resposta de conversa inválido no outbox.');
@@ -265,5 +328,49 @@ function parseEmbeddingPayload(event: ClaimedOutboxEvent): EmbeddingsQueuePayloa
     documentId: payload.documentId,
     attempt: payload.attempt as number,
     status: payload.status,
+  };
+}
+
+function parseNotificationPayload(event: ClaimedOutboxEvent): NotificationQueuePayload {
+  if (!event.payload || typeof event.payload !== 'object' || Array.isArray(event.payload)) {
+    throw new Error('Payload de notificação inválido no outbox.');
+  }
+  const payload = event.payload as Record<string, Prisma.JsonValue>;
+  if (typeof payload.notificationId !== 'string') {
+    throw new Error('Campo notificationId ausente no evento de notificação.');
+  }
+  return { outboxEventId: event.id, notificationId: payload.notificationId };
+}
+
+function parseResponseAnalysisPayload(event: ClaimedOutboxEvent): NotificationFactoryPayload {
+  if (!event.payload || typeof event.payload !== 'object' || Array.isArray(event.payload)) {
+    throw new Error('Payload de análise de resposta inválido no outbox.');
+  }
+  const payload = event.payload as Record<string, Prisma.JsonValue>;
+  if (typeof payload.analysisId !== 'string') {
+    throw new Error('Campo analysisId ausente no evento ResponseAnalysisCompleted.');
+  }
+  return {
+    outboxEventId: event.id,
+    eventType: 'ResponseAnalysisCompleted',
+    analysisId: payload.analysisId,
+    propositionId: typeof payload.propositionId === 'string' ? payload.propositionId : undefined,
+  };
+}
+
+function parseDeadlinePayload(event: ClaimedOutboxEvent): NotificationFactoryPayload {
+  if (!event.payload || typeof event.payload !== 'object' || Array.isArray(event.payload)) {
+    throw new Error('Payload de prazo inválido no outbox.');
+  }
+  const payload = event.payload as Record<string, Prisma.JsonValue>;
+  if (typeof payload.deadlineId !== 'string') {
+    throw new Error('Campo deadlineId ausente no evento de prazo.');
+  }
+  return {
+    outboxEventId: event.id,
+    eventType: event.event_type as 'DeadlineApproaching' | 'DeadlineExpired',
+    deadlineId: payload.deadlineId,
+    propositionId: typeof payload.propositionId === 'string' ? payload.propositionId : undefined,
+    dueDate: typeof payload.dueDate === 'string' ? payload.dueDate : undefined,
   };
 }

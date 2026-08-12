@@ -27,15 +27,30 @@ import {
 import { WorkerHealthServer } from './health-server';
 import { InboxWatcher } from './inbox-watcher';
 import { StructuredLogger } from './logger';
+import { N8nWebhookDeliveryProvider } from './notification/notification-delivery-provider';
+import { NotificationDeliveryPipeline } from './notification/notification-delivery-pipeline';
+import { NotificationFactory } from './notification/notification-factory';
+import {
+  NOTIFICATION_FACTORY_QUEUE,
+  type NotificationFactoryPayload,
+} from './notification/notification-factory-queue';
+import {
+  NOTIFICATION_QUEUE,
+  type NotificationQueuePayload,
+} from './notification/notification-queue';
+import { createNotificationReconciliation } from './notification/notification-reconciliation';
 import {
   createAiQueue,
   createConversationQueue,
   createDocumentQueue,
   createEmbeddingsQueue,
+  createNotificationFactoryQueue,
+  createNotificationQueue,
   OutboxDispatcher,
 } from './outbox-dispatcher';
 import { PdfJsSubprocessExtractor } from './pdf-extractor';
 import { WorkerObjectStorage } from './storage';
+import { WhatsappContextResolver } from './whatsapp/whatsapp-context-resolver';
 
 async function bootstrap(): Promise<void> {
   const config = loadConfig();
@@ -71,6 +86,8 @@ async function bootstrap(): Promise<void> {
   const aiQueue = createAiQueue(redis);
   const embeddingsQueue = createEmbeddingsQueue(redis);
   const conversationQueue = createConversationQueue(redis);
+  const notificationQueue = createNotificationQueue(redis);
+  const notificationFactoryQueue = createNotificationFactoryQueue(redis);
   const llmProvider = createLLMProvider({
     provider: config.LLM_PROVIDER,
     model: config.LLM_MODEL,
@@ -86,19 +103,36 @@ async function bootstrap(): Promise<void> {
   });
   const aiPipeline = new AiAnalysisPipeline(prisma, llmProvider, config, logger);
   const embeddingsIndexer = new EmbeddingsIndexer(prisma, config, logger);
+  const whatsappContext = new WhatsappContextResolver(prisma, redis, config, logger);
   const conversationPipeline = new ConversationAnswerPipeline(
     prisma,
     llmProvider,
     embeddingsProvider,
     config,
     logger,
+    whatsappContext,
   );
+  const deliveryProvider = new N8nWebhookDeliveryProvider({
+    baseUrl: config.N8N_WEBHOOK_BASE_URL ?? '',
+    secret: config.N8N_WEBHOOK_SECRET ?? '',
+    timeoutMs: config.N8N_REQUEST_TIMEOUT_MS,
+    logger,
+  });
+  const notificationPipeline = new NotificationDeliveryPipeline(
+    prisma,
+    deliveryProvider,
+    config,
+    logger,
+  );
+  const notificationFactory = new NotificationFactory(prisma, config, logger);
   const outbox = new OutboxDispatcher(
     prisma,
     queue,
     aiQueue,
     embeddingsQueue,
     conversationQueue,
+    notificationQueue,
+    notificationFactoryQueue,
     redis,
     config,
     logger,
@@ -208,6 +242,53 @@ async function bootstrap(): Promise<void> {
     logger.error('Worker de respostas web falhou.', { error: error.message }),
   );
 
+  const notificationWorker = new Worker<NotificationQueuePayload>(
+    NOTIFICATION_QUEUE,
+    async (job) => {
+      await notificationPipeline.process(job.data.notificationId, job.id ?? 'unknown');
+    },
+    {
+      connection: redis,
+      concurrency: config.NOTIFICATION_WORKER_CONCURRENCY,
+      lockDuration: Math.max(30_000, config.N8N_REQUEST_TIMEOUT_MS * 2),
+    },
+  );
+  notificationWorker.on('error', (error) =>
+    logger.error('Worker de entrega de notificações falhou.', { error: error.message }),
+  );
+  notificationWorker.on('failed', (job, error) => {
+    if (!job) return;
+    void notificationPipeline.recordFinalFailure(job.data.notificationId, error);
+  });
+
+  const notificationFactoryWorker = new Worker<NotificationFactoryPayload>(
+    NOTIFICATION_FACTORY_QUEUE,
+    async (job) => {
+      const payload = job.data;
+      if (payload.eventType === 'ResponseAnalysisCompleted' && payload.analysisId) {
+        await notificationFactory.processResponseAnalysis(payload.analysisId, job.id ?? 'unknown');
+      } else if (
+        (payload.eventType === 'DeadlineApproaching' || payload.eventType === 'DeadlineExpired') &&
+        payload.deadlineId
+      ) {
+        await notificationFactory.processDeadline(
+          payload.eventType,
+          payload.deadlineId,
+          payload.dueDate ?? '',
+          job.id ?? 'unknown',
+        );
+      }
+    },
+    {
+      connection: redis,
+      concurrency: config.NOTIFICATION_WORKER_CONCURRENCY,
+      lockDuration: 30_000,
+    },
+  );
+  notificationFactoryWorker.on('error', (error) =>
+    logger.error('Worker de criação de notificações falhou.', { error: error.message }),
+  );
+
   await Promise.all([prisma.$connect(), redis.ping(), storage.assertBucketAvailable()]);
   await Promise.all([
     queue.waitUntilReady(),
@@ -218,8 +299,19 @@ async function bootstrap(): Promise<void> {
     embeddingsWorker.waitUntilReady(),
     conversationQueue.waitUntilReady(),
     conversationWorker.waitUntilReady(),
+    notificationQueue.waitUntilReady(),
+    notificationWorker.waitUntilReady(),
+    notificationFactoryQueue.waitUntilReady(),
+    notificationFactoryWorker.waitUntilReady(),
   ]);
   const deadlineMaintenance = await createDeadlineMaintenance(prisma, redis, config, logger);
+  const notificationReconciliation = await createNotificationReconciliation(
+    prisma,
+    notificationQueue,
+    redis,
+    config,
+    logger,
+  );
   outbox.start();
   if (config.DOCUMENT_WATCHER_ENABLED) await inbox.start();
   else logger.warn('Watcher da inbox desabilitado explicitamente.', { stage: 'inbox' });
@@ -244,6 +336,21 @@ async function bootstrap(): Promise<void> {
       stage: 'conversation',
     });
   }
+  if (!config.WHATSAPP_ENABLED) {
+    logger.warn('WhatsApp desabilitado explicitamente (WHATSAPP_ENABLED=false).', {
+      stage: 'whatsapp',
+    });
+  }
+  if (!config.RESPONSE_NOTIFICATIONS_ENABLED) {
+    logger.warn('Notificações de resposta desabilitadas (RESPONSE_NOTIFICATIONS_ENABLED=false).', {
+      stage: 'notifications',
+    });
+  }
+  if (!config.DEADLINE_NOTIFICATIONS_ENABLED) {
+    logger.warn('Alertas de prazo desabilitados (DEADLINE_NOTIFICATIONS_ENABLED=false).', {
+      stage: 'notifications',
+    });
+  }
   health.start();
   logger.info('Worker documental pronto.', {
     queue: DOCUMENT_QUEUE,
@@ -266,6 +373,12 @@ async function bootstrap(): Promise<void> {
       embeddingsQueue.close(),
       conversationWorker.close(),
       conversationQueue.close(),
+      notificationWorker.close(),
+      notificationQueue.close(),
+      notificationFactoryWorker.close(),
+      notificationFactoryQueue.close(),
+      notificationReconciliation.worker.close(),
+      notificationReconciliation.queue.close(),
       deadlineMaintenance.worker.close(),
       deadlineMaintenance.queue.close(),
       health.stop(),

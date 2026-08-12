@@ -64,6 +64,19 @@ const environmentSchema = z
     WORKER_HEALTH_PORT: z.coerce.number().int().positive().default(3002),
     AI_PROCESSING_ENABLED: booleanFromString,
     LLM_PROVIDER: z.enum(['anthropic', 'openai', 'fake']).default('fake'),
+    WHATSAPP_ENABLED: booleanFromString,
+    WHATSAPP_SESSION_TTL_SECONDS: z.coerce.number().int().min(60).max(604_800).default(3_600),
+    WHATSAPP_INBOUND_MAX_AGE_SECONDS: z.coerce.number().int().min(30).max(3_600).default(300),
+    WHATSAPP_INBOUND_MAX_BODY_BYTES: z.coerce
+      .number()
+      .int()
+      .min(1_024)
+      .max(102_400)
+      .default(16_384),
+    WHATSAPP_RATE_LIMIT: z.coerce.number().int().min(1).max(1_000).default(20),
+    N8N_WEBHOOK_BASE_URL: z.string().url().optional(),
+    N8N_WEBHOOK_SECRET: z.string().min(16).optional(),
+    N8N_REQUEST_TIMEOUT_MS: z.coerce.number().int().min(1_000).default(10_000),
   })
   .superRefine((value, context) => {
     if (
@@ -83,6 +96,22 @@ const environmentSchema = z
         path: ['DOCUMENT_CHUNK_OVERLAP'],
         message: 'deve ser menor que DOCUMENT_CHUNK_SIZE',
       });
+    }
+    if (value.WHATSAPP_ENABLED) {
+      if (!value.N8N_WEBHOOK_SECRET) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['N8N_WEBHOOK_SECRET'],
+          message: 'obrigatório quando WHATSAPP_ENABLED=true',
+        });
+      }
+      if (!value.N8N_WEBHOOK_BASE_URL) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['N8N_WEBHOOK_BASE_URL'],
+          message: 'obrigatória quando WHATSAPP_ENABLED=true',
+        });
+      }
     }
   });
 

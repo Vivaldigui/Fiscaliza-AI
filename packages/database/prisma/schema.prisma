@@ -286,6 +286,13 @@ enum NotificationStatus {
   CANCELLED
 }
 
+enum NotificationType {
+  WHATSAPP_CONVERSATION_REPLY
+  RESPONSE_ANALYSIS_COMPLETED
+  DEADLINE_APPROACHING
+  DEADLINE_EXPIRED
+}
+
 enum SettingValueType {
   STRING
   INTEGER
@@ -402,7 +409,10 @@ model WhatsappIdentity {
   active      Boolean   @default(true)
   createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt   DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
-  councilor   Councilor @relation(fields: [councilorId], references: [id], onDelete: Cascade)
+  councilor                Councilor @relation(fields: [councilorId], references: [id], onDelete: Cascade)
+  conversations            Conversation[]
+  inboundMessages          InboundMessage[]
+  notifications            Notification[]
 
   @@unique([phoneNumber, instance])
   @@index([councilorId, active])
@@ -433,7 +443,6 @@ model Proposition {
   previousAssociationRevisions ResponseAssociationRevision[] @relation("PreviousAssociationProposition")
   newAssociationRevisions      ResponseAssociationRevision[] @relation("NewAssociationProposition")
   extensionRequests            DeadlineExtensionRequest[]
-
   @@unique([type, number, year])
   @@index([year, type])
   @@index([status, protocolDate])
@@ -771,6 +780,7 @@ model Analysis {
   inputDocuments   AnalysisDocument[]
   aiUsage          AIUsage[]
   extractedItems   RequestedItem[]    @relation("RequestedItemExtraction")
+  notifications    Notification[]
 
   @@index([propositionId, type, createdAt])
   @@index([responseId])
@@ -906,6 +916,7 @@ model Deadline {
   extensions            DeadlineExtension[]
   extensionRequests     DeadlineExtensionRequest[]
   suspensions           DeadlineSuspension[]
+  notifications         Notification[]
 
   @@index([status, currentDueDate])
   @@map("deadlines")
@@ -996,6 +1007,7 @@ model Conversation {
   id                String                @id @default(uuid()) @db.Uuid
   userId            String                @map("user_id") @db.Uuid
   propositionId     String?               @map("proposition_id") @db.Uuid
+  whatsappIdentityId String?              @map("whatsapp_identity_id") @db.Uuid
   channel           ConversationChannel
   title             String?               @db.VarChar(300)
   lastInteractionAt DateTime              @default(now()) @map("last_interaction_at") @db.Timestamptz(3)
@@ -1003,10 +1015,13 @@ model Conversation {
   updatedAt         DateTime              @updatedAt @map("updated_at") @db.Timestamptz(3)
   user              User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
   proposition       Proposition?          @relation(fields: [propositionId], references: [id], onDelete: SetNull)
+  whatsappIdentity  WhatsappIdentity?     @relation(fields: [whatsappIdentityId], references: [id], onDelete: SetNull)
   messages          ConversationMessage[]
+  inboundMessages   InboundMessage[]
 
   @@index([userId, lastInteractionAt])
   @@index([propositionId])
+  @@index([whatsappIdentityId])
   @@map("conversations")
 }
 
@@ -1030,6 +1045,7 @@ model ConversationMessage {
   createdAt         DateTime                  @default(now()) @map("created_at") @db.Timestamptz(3)
   conversation      Conversation              @relation(fields: [conversationId], references: [id], onDelete: Cascade)
   aiUsages          AIUsage[]
+  inboundMessages   InboundMessage[]
 
   @@unique([conversationId, role, inputHash])
   @@index([conversationId, createdAt])
@@ -1038,44 +1054,83 @@ model ConversationMessage {
 }
 
 model InboundMessage {
-  id           String               @id @default(uuid()) @db.Uuid
-  instance     String               @db.VarChar(100)
-  messageId    String               @map("message_id") @db.VarChar(255)
-  phoneHash    String               @map("phone_hash") @db.Char(64)
-  payloadHash  String               @map("payload_hash") @db.Char(64)
-  status       InboundMessageStatus @default(RECEIVED)
-  responseBody Json?                @map("response_body")
-  error        String?              @db.Text
-  receivedAt   DateTime             @map("received_at") @db.Timestamptz(3)
-  processedAt  DateTime?            @map("processed_at") @db.Timestamptz(3)
-  createdAt    DateTime             @default(now()) @map("created_at") @db.Timestamptz(3)
+  id                    String               @id @default(uuid()) @db.Uuid
+  instance              String               @db.VarChar(100)
+  messageId             String               @map("message_id") @db.VarChar(255)
+  phoneHash             String               @map("phone_hash") @db.Char(64)
+  payloadHash           String               @map("payload_hash") @db.Char(64)
+  status                InboundMessageStatus @default(RECEIVED)
+  responseBody          Json?                @map("response_body")
+  error                 String?              @db.Text
+  identityId            String?              @map("identity_id") @db.Uuid
+  conversationId        String?              @map("conversation_id") @db.Uuid
+  conversationMessageId String?              @map("conversation_message_id") @db.Uuid
+  receivedAt            DateTime             @map("received_at") @db.Timestamptz(3)
+  processedAt           DateTime?            @map("processed_at") @db.Timestamptz(3)
+  createdAt             DateTime             @default(now()) @map("created_at") @db.Timestamptz(3)
+  identity              WhatsappIdentity?    @relation(fields: [identityId], references: [id], onDelete: SetNull)
+  conversation          Conversation?        @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+  conversationMessage   ConversationMessage? @relation(fields: [conversationMessageId], references: [id], onDelete: SetNull)
 
   @@unique([instance, messageId])
   @@index([status, receivedAt])
+  @@index([identityId, receivedAt])
+  @@index([conversationId])
   @@map("inbound_messages")
 }
 
 model Notification {
-  id                String              @id @default(uuid()) @db.Uuid
-  recipientId       String              @map("recipient_id") @db.Uuid
+  id                String                    @id @default(uuid()) @db.Uuid
+  type              NotificationType
+  recipientId       String?                   @map("recipient_id") @db.Uuid
+  identityId        String?                   @map("identity_id") @db.Uuid
+  destinationPhone  String?                   @map("destination_phone") @db.VarChar(20)
+  analysisId        String?                   @map("analysis_id") @db.Uuid
+  deadlineId        String?                   @map("deadline_id") @db.Uuid
   channel           NotificationChannel
-  template          String              @db.VarChar(150)
+  template          String                    @db.VarChar(150)
+  templateVersion   String?                   @map("template_version") @db.VarChar(64)
   payload           Json
-  idempotencyKey    String              @unique @map("idempotency_key") @db.VarChar(255)
-  status            NotificationStatus  @default(PENDING)
-  attempts          Int                 @default(0)
-  nextAttemptAt     DateTime?           @map("next_attempt_at") @db.Timestamptz(3)
-  externalMessageId String?             @map("external_message_id") @db.VarChar(255)
-  lastError         String?             @map("last_error") @db.Text
-  sentAt            DateTime?           @map("sent_at") @db.Timestamptz(3)
-  deliveredAt       DateTime?           @map("delivered_at") @db.Timestamptz(3)
-  createdAt         DateTime            @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt         DateTime            @updatedAt @map("updated_at") @db.Timestamptz(3)
-  recipient         User                @relation(fields: [recipientId], references: [id], onDelete: Cascade)
+  idempotencyKey    String                    @unique @map("idempotency_key") @db.VarChar(255)
+  status            NotificationStatus        @default(PENDING)
+  attempts          Int                       @default(0)
+  nextAttemptAt     DateTime?                 @map("next_attempt_at") @db.Timestamptz(3)
+  externalMessageId String?                   @map("external_message_id") @db.VarChar(255)
+  lastError         String?                   @map("last_error") @db.Text
+  sentAt            DateTime?                 @map("sent_at") @db.Timestamptz(3)
+  deliveredAt       DateTime?                 @map("delivered_at") @db.Timestamptz(3)
+  createdAt         DateTime                  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt         DateTime                  @updatedAt @map("updated_at") @db.Timestamptz(3)
+  recipient         User?                     @relation(fields: [recipientId], references: [id], onDelete: SetNull)
+  identity          WhatsappIdentity?         @relation(fields: [identityId], references: [id], onDelete: SetNull)
+  analysis          Analysis?                 @relation(fields: [analysisId], references: [id], onDelete: SetNull)
+  deadline          Deadline?                 @relation(fields: [deadlineId], references: [id], onDelete: SetNull)
+  deliveryAttempts  NotificationDeliveryAttempt[]
 
   @@index([status, nextAttemptAt])
   @@index([recipientId, createdAt])
+  @@index([identityId, createdAt])
+  @@index([type, status, createdAt])
+  @@index([analysisId])
+  @@index([deadlineId])
   @@map("notifications")
+}
+
+model NotificationDeliveryAttempt {
+  id                String             @id @default(uuid()) @db.Uuid
+  notificationId    String             @map("notification_id") @db.Uuid
+  attempt           Int
+  status            NotificationStatus
+  provider          String             @db.VarChar(100)
+  externalMessageId String?            @map("external_message_id") @db.VarChar(255)
+  error             String?            @db.Text
+  createdAt         DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt         DateTime           @updatedAt @map("updated_at") @db.Timestamptz(3)
+  notification      Notification       @relation(fields: [notificationId], references: [id], onDelete: Cascade)
+
+  @@unique([notificationId, attempt])
+  @@index([notificationId, status])
+  @@map("notification_delivery_attempts")
 }
 
 model SystemSetting {

@@ -1,5 +1,5 @@
 {
-  "name": "Fiscaliza AI - Resposta analisada (exemplo inativo)",
+  "name": "Fiscaliza AI - Resposta analisada (referência de entrega)",
   "active": false,
   "nodes": [
     {
@@ -9,27 +9,57 @@
       "position": [0, 0],
       "parameters": {
         "httpMethod": "POST",
-        "path": "fiscaliza/response-analysis-completed",
-        "responseMode": "onReceived"
+        "path": "fiscaliza/notification-delivery",
+        "responseMode": "lastNode",
+        "options": {
+          "includeHeaders": true
+        }
       }
     },
     {
-      "name": "Enviar UAZAPI",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.2,
+      "name": "Filtrar respostas analisadas",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
       "position": [280, 0],
       "parameters": {
-        "method": "POST",
-        "url": "={{$env.UAZAPI_SEND_URL}}",
-        "sendBody": true,
-        "contentType": "raw",
-        "rawContentType": "application/json",
-        "body": "={{JSON.stringify($json)}}"
+        "conditions": {
+          "options": { "caseSensitive": true },
+          "conditions": [
+            {
+              "leftValue": "={{ $('Backend Webhook').first().json.notificationType ?? $json.notificationType }}",
+              "rightValue": "RESPONSE_ANALYSIS_COMPLETED",
+              "type": "string",
+              "operation": "equals"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "Entrega consolidada",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 2.3,
+      "position": [560, 0],
+      "parameters": {
+        "workflowId": "notification-delivery"
       }
     }
   ],
   "connections": {
-    "Backend Webhook": { "main": [[{ "node": "Enviar UAZAPI", "type": "main", "index": 0 }]] }
+    "Backend Webhook": {
+      "main": [[{ "node": "Filtrar respostas analisadas", "type": "main", "index": 0 }]]
+    },
+    "Filtrar respostas analisadas": {
+      "main": [
+        [
+          {
+            "node": "Entrega consolidada",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
   },
   "settings": { "executionOrder": "v1" }
 }

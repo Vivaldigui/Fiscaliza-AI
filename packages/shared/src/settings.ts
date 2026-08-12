@@ -67,6 +67,7 @@ export const settingSchemas = {
   'association.minimumMargin': confidence,
   'association.signalWeights': associationWeightsSchema,
   'documents.maxSizeMb': z.number().int().min(1).max(500),
+  'whatsapp.neutralReply': z.string().min(1).max(1_000),
 } as const;
 
 export type SystemSettingKey = keyof typeof settingSchemas;
@@ -177,6 +178,12 @@ export const initialSystemSettings: Record<SystemSettingKey, SettingDefinition> 
     value: 25,
     valueType: 'INTEGER',
     description: 'Tamanho máximo de PDF permitido no upload manual.',
+  },
+  'whatsapp.neutralReply': {
+    value:
+      'Este número não está habilitado para consultas no Fiscaliza AI. Entre em contato com a administração da Câmara para solicitar acesso.',
+    valueType: 'STRING',
+    description: 'Resposta padrão para números sem identidade autorizada.',
   },
 };
 

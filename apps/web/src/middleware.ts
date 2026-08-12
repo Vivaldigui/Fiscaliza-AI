@@ -29,6 +29,7 @@ export const config = {
     '/feriados/:path*',
     '/vereadores/:path*',
     '/whatsapp/:path*',
+    '/notificacoes/:path*',
     '/configuracoes/:path*',
     '/auditoria/:path*',
     '/uso-ia/:path*',

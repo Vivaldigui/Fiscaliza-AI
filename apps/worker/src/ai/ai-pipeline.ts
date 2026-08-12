@@ -213,6 +213,7 @@ export class AiAnalysisPipeline {
 
       await this.persist({
         analysisId,
+        analysisType: analysis.type,
         propositionId: proposition.id,
         propositionType: proposition.type,
         finalized,
@@ -621,6 +622,7 @@ export class AiAnalysisPipeline {
 
   private async persist(params: {
     analysisId: string;
+    analysisType: string;
     propositionId: string;
     propositionType: string;
     finalized: FinalizedItem[];
@@ -720,6 +722,21 @@ export class AiAnalysisPipeline {
           payload: { analysisId: params.analysisId, propositionId: params.propositionId },
         },
       });
+      // Evento derivado (Fase 5B): somente análises de RESPOSTA realmente
+      // COMPLETED geram contrato para notificação de autores. Extrações,
+      // PENDING/PROCESSING/FAILED/NEEDS_HUMAN_REVIEW nunca notificam.
+      const isResponseAnalysis =
+        params.analysisType === 'REQUEST_RESPONSE' || params.analysisType === 'INDICATION_RESPONSE';
+      if (params.overallStatus === 'COMPLETED' && isResponseAnalysis) {
+        await transaction.outboxEvent.create({
+          data: {
+            eventType: 'ResponseAnalysisCompleted',
+            aggregateType: 'Analysis',
+            aggregateId: params.analysisId,
+            payload: { analysisId: params.analysisId, propositionId: params.propositionId },
+          },
+        });
+      }
     });
   }
 
