@@ -24,7 +24,7 @@ interface LLMProvider {
 
 Configuração operacional adicional (Fase 4), lida pelo worker: `AI_PROCESSING_ENABLED` (fail closed, padrão `false`), `AI_REQUEST_TIMEOUT_MS`, `AI_MAX_RETRIES`, `AI_JOB_CONCURRENCY`, `AI_MAX_PAGES_PER_BATCH`, `AI_MAX_INPUT_CHARS`, `AI_QUEUE_ATTEMPTS`, `AI_QUEUE_BACKOFF_MS`. Os limiares de confiança (`analysis.confidence.normal`/`analysis.confidence.warning`) continuam como `SystemSetting`, não variável de ambiente, pois são decisão administrativa e não parâmetro operacional de infraestrutura.
 
-Embeddings têm provider/modelo/dimensão próprios para evitar assumir que o provider de chat também gera vetores; não são calculados na Fase 4.
+Embeddings têm provider/modelo/dimensão próprios (`EmbeddingProvider`/`createEmbeddingProvider` em `packages/ai`) para evitar assumir que o provider de chat também gera vetores. Não foram calculados na Fase 4; a Fase 5A os calcula de forma incremental e versionada (provider/modelo/versão/hash), conforme `ADR-002-EMBEDDINGS.md`.
 
 ## 3. Pipeline
 
@@ -167,7 +167,7 @@ Fluxo de pergunta:
 7. validar fontes contra páginas;
 8. persistir mensagem e uso.
 
-Chunks nunca atravessam página. O SQL aplica o conjunto autorizado antes do limite. Pergunta sem fonte suficiente recebe resposta explícita de insuficiência.
+Chunks nunca atravessam página. O SQL aplica o conjunto autorizado antes do limite. Pergunta sem fonte suficiente recebe resposta explícita de insuficiência. A indexação de embeddings é incremental e idempotente: o worker pula chunks cujo `embedding_hash` já corresponde ao provider/modelo/versão correntes, escreve apenas os pendentes e registra o uso (`operation='embedding'`) por job; a consulta restringe-se à tentativa de processamento corrente do documento, então reprocessar nunca corrompe a busca da versão histórica.
 
 ## 14. Testes essenciais
 
@@ -177,4 +177,8 @@ Chunks nunca atravessam página. O SQL aplica o conjunto autorizado antes do lim
 - cache varia com documento/prompt/modelo;
 - requerimento crítico de três itens produz completo/parcial/não respondido;
 - indicação de intenção futura não vira execução;
-- RAG não retorna chunk fora do escopo do vereador.
+- RAG não retorna chunk fora do escopo do vereador;
+- o índice de embeddings ignora índices antigos e tentativas não correntes;
+- o worker recusa provider `fake` em produção e `CHAT_ENABLED` sem IA/embeddings habilitados;
+- a conversa rebaixa para insuficiência quando o modelo cita fonte inventada;
+- a resposta estruturada ignora instruções adversárias embutidas na pergunta.

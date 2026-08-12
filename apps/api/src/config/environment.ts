@@ -60,6 +60,7 @@ const environmentSchema = z
     DOCUMENT_WORKER_CONCURRENCY: z.coerce.number().int().min(1).max(16).default(2),
     OUTBOX_POLL_INTERVAL_MS: z.coerce.number().int().min(250).default(1_000),
     OUTBOX_BATCH_SIZE: z.coerce.number().int().min(1).max(100).default(20),
+    CONVERSATION_SESSION_TTL_SECONDS: z.coerce.number().int().min(60).max(86_400).default(1_800),
     WORKER_HEALTH_PORT: z.coerce.number().int().positive().default(3002),
     AI_PROCESSING_ENABLED: booleanFromString,
     LLM_PROVIDER: z.enum(['anthropic', 'openai', 'fake']).default('fake'),

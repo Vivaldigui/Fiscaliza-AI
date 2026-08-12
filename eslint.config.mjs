@@ -13,6 +13,7 @@ export default tseslint.config(
       '**/generated/**',
       '**/prisma/migrations/**',
       'apps/web/next-env.d.ts',
+      'apps/worker/scripts/**',
     ],
   },
   eslint.configs.recommended,

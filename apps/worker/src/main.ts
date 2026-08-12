@@ -8,7 +8,7 @@ import {
   type DocumentQueuePayload,
   TesseractCliOcrProvider,
 } from '@fiscaliza/document-processing';
-import { createLLMProvider } from '@fiscaliza/ai';
+import { createEmbeddingProvider, createLLMProvider } from '@fiscaliza/ai';
 import { UnrecoverableError, Worker } from 'bullmq';
 import Redis from 'ioredis';
 import { AiAnalysisPipeline } from './ai/ai-pipeline';
@@ -17,10 +17,23 @@ import { loadConfig } from './config';
 import { DocumentPipeline } from './document-pipeline';
 import { createDeadlineMaintenance } from './deadline-maintenance';
 import { DocumentProcessingStateService } from './document-state';
+import { EmbeddingsIndexer } from './embeddings/embeddings-indexer';
+import { EMBEDDINGS_QUEUE, type EmbeddingsQueuePayload } from './embeddings/embeddings-queue';
+import { ConversationAnswerPipeline } from './conversation/conversation-answer-pipeline';
+import {
+  CONVERSATION_QUEUE,
+  type ConversationQueuePayload,
+} from './conversation/conversation-queue';
 import { WorkerHealthServer } from './health-server';
 import { InboxWatcher } from './inbox-watcher';
 import { StructuredLogger } from './logger';
-import { createAiQueue, createDocumentQueue, OutboxDispatcher } from './outbox-dispatcher';
+import {
+  createAiQueue,
+  createConversationQueue,
+  createDocumentQueue,
+  createEmbeddingsQueue,
+  OutboxDispatcher,
+} from './outbox-dispatcher';
 import { PdfJsSubprocessExtractor } from './pdf-extractor';
 import { WorkerObjectStorage } from './storage';
 
@@ -56,13 +69,39 @@ async function bootstrap(): Promise<void> {
   );
   const queue = createDocumentQueue(redis);
   const aiQueue = createAiQueue(redis);
+  const embeddingsQueue = createEmbeddingsQueue(redis);
+  const conversationQueue = createConversationQueue(redis);
   const llmProvider = createLLMProvider({
     provider: config.LLM_PROVIDER,
     model: config.LLM_MODEL,
     ...(config.LLM_API_KEY ? { apiKey: config.LLM_API_KEY } : {}),
   });
+  const embeddingsProvider = createEmbeddingProvider({
+    provider: config.EMBEDDINGS_PROVIDER,
+    model: config.EMBEDDINGS_MODEL,
+    dimension: config.EMBEDDINGS_DIMENSION,
+    timeoutMs: config.EMBEDDINGS_TIMEOUT_MS,
+    ...(config.EMBEDDINGS_API_KEY ? { apiKey: config.EMBEDDINGS_API_KEY } : {}),
+  });
   const aiPipeline = new AiAnalysisPipeline(prisma, llmProvider, config, logger);
-  const outbox = new OutboxDispatcher(prisma, queue, aiQueue, redis, config, logger);
+  const embeddingsIndexer = new EmbeddingsIndexer(prisma, config, logger);
+  const conversationPipeline = new ConversationAnswerPipeline(
+    prisma,
+    llmProvider,
+    embeddingsProvider,
+    config,
+    logger,
+  );
+  const outbox = new OutboxDispatcher(
+    prisma,
+    queue,
+    aiQueue,
+    embeddingsQueue,
+    conversationQueue,
+    redis,
+    config,
+    logger,
+  );
   const inbox = new InboxWatcher(prisma, storage, config, logger);
   const health = new WorkerHealthServer(prisma, redis, storage, config, logger);
   const worker = new Worker<DocumentQueuePayload>(
@@ -138,12 +177,46 @@ async function bootstrap(): Promise<void> {
   );
   aiWorker.on('error', (error) => logger.error('Worker de IA falhou.', { error: error.message }));
 
+  const embeddingsWorker = new Worker<EmbeddingsQueuePayload>(
+    EMBEDDINGS_QUEUE,
+    async (job) => {
+      await embeddingsIndexer.process(job.data.documentId, job.data.attempt, job.id ?? 'unknown');
+    },
+    {
+      connection: redis,
+      concurrency: config.EMBEDDINGS_WORKER_CONCURRENCY,
+      lockDuration: Math.max(30_000, config.EMBEDDINGS_TIMEOUT_MS * 2),
+    },
+  );
+  embeddingsWorker.on('error', (error) =>
+    logger.error('Worker de embeddings falhou.', { error: error.message }),
+  );
+
+  const conversationWorker = new Worker<ConversationQueuePayload>(
+    CONVERSATION_QUEUE,
+    async (job) => {
+      await conversationPipeline.process(job.data.conversationMessageId, job.id ?? 'unknown');
+    },
+    {
+      connection: redis,
+      concurrency: config.CHAT_WORKER_CONCURRENCY,
+      lockDuration: Math.max(30_000, config.AI_REQUEST_TIMEOUT_MS * 4),
+    },
+  );
+  conversationWorker.on('error', (error) =>
+    logger.error('Worker de respostas web falhou.', { error: error.message }),
+  );
+
   await Promise.all([prisma.$connect(), redis.ping(), storage.assertBucketAvailable()]);
   await Promise.all([
     queue.waitUntilReady(),
     worker.waitUntilReady(),
     aiQueue.waitUntilReady(),
     aiWorker.waitUntilReady(),
+    embeddingsQueue.waitUntilReady(),
+    embeddingsWorker.waitUntilReady(),
+    conversationQueue.waitUntilReady(),
+    conversationWorker.waitUntilReady(),
   ]);
   const deadlineMaintenance = await createDeadlineMaintenance(prisma, redis, config, logger);
   outbox.start();
@@ -157,6 +230,17 @@ async function bootstrap(): Promise<void> {
   if (!config.AI_PROCESSING_ENABLED) {
     logger.warn('Processamento por IA desabilitado explicitamente (AI_PROCESSING_ENABLED=false).', {
       stage: 'ai',
+    });
+  }
+  if (!config.EMBEDDINGS_ENABLED) {
+    logger.warn(
+      'Indexação por embeddings desabilitada explicitamente (EMBEDDINGS_ENABLED=false).',
+      { stage: 'embeddings' },
+    );
+  }
+  if (!config.CHAT_ENABLED) {
+    logger.warn('Conversas web desabilitadas explicitamente (CHAT_ENABLED=false).', {
+      stage: 'conversation',
     });
   }
   health.start();
@@ -177,6 +261,10 @@ async function bootstrap(): Promise<void> {
       queue.close(),
       aiWorker.close(),
       aiQueue.close(),
+      embeddingsWorker.close(),
+      embeddingsQueue.close(),
+      conversationWorker.close(),
+      conversationQueue.close(),
       deadlineMaintenance.worker.close(),
       deadlineMaintenance.queue.close(),
       health.stop(),

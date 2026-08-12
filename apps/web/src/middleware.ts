@@ -21,6 +21,7 @@ export const config = {
     '/proposicoes/:path*',
     '/requerimentos/:path*',
     '/indicacoes/:path*',
+    '/conversas/:path*',
     '/respostas/:path*',
     '/associacoes/:path*',
     '/revisoes/:path*',
