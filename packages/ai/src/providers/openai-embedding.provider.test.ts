@@ -5,6 +5,19 @@ import { EMBEDDING_DIMENSION } from '../embeddings';
 import { createEmbeddingProvider } from '../embedding-provider-factory';
 import { OpenAIEmbeddingProvider } from './openai-embedding.provider';
 
+/**
+ * Asserts token mapping exactly while treating `latencyMs` as
+ * environment-dependent: `Math.round(performance.now() - startedAt)` can be
+ * 0 or 1 for an instant mocked completion depending on machine load.
+ */
+function assertUsage(
+  actual: { inputTokens: number | null; latencyMs: number },
+  inputTokens: number | null,
+): void {
+  assert.equal(actual.inputTokens, inputTokens);
+  assert.ok(Number.isInteger(actual.latencyMs) && actual.latencyMs >= 0);
+}
+
 function stubEmbeddings(input: unknown, promptTokens?: number): OpenAI {
   return {
     embeddings: {
@@ -33,7 +46,7 @@ void describe('OpenAIEmbeddingProvider', () => {
     assert.equal(result.provider, 'openai');
     assert.equal(result.model, 'text-embedding-3-small');
     assert.equal(result.dimension, 1536);
-    assert.deepEqual(result.usage, { inputTokens: 42, latencyMs: 0 });
+    assertUsage(result.usage, 42);
   });
 
   void it('mapeia ausência de usage do provider para inputTokens null', async () => {
