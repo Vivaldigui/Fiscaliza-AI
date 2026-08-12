@@ -14,9 +14,11 @@ export interface OpenAIProviderConfig {
   apiKey: string;
   model: string;
   defaultMaxTokens?: number;
+  /** Request timeout in ms; mirrors EMBEDDINGS_TIMEOUT_MS for embeddings. */
+  timeoutMs?: number;
   /**
    * Injected client, primarily so tests can stub `chat.completions.create`
-   * without any network access. Defaults to `new OpenAI({ apiKey })`.
+   * without any network access. Defaults to `new OpenAI({ apiKey, timeout })`.
    */
   client?: OpenAI;
 }
@@ -44,7 +46,7 @@ export class OpenAIProvider implements LLMProvider {
     if (!config.model) throw new Error('LLM_MODEL não configurado');
     this.model = config.model;
     this.defaultMaxTokens = config.defaultMaxTokens ?? 4096;
-    this.client = config.client ?? new OpenAI({ apiKey: config.apiKey });
+    this.client = config.client ?? new OpenAI({ apiKey: config.apiKey, timeout: config.timeoutMs });
   }
 
   async generateStructured<TSchema extends z.ZodTypeAny>(

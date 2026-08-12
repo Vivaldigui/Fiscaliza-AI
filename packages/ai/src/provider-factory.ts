@@ -8,6 +8,7 @@ export interface LLMProviderFactoryConfig {
   model: string;
   apiKey?: string;
   defaultMaxTokens?: number;
+  timeoutMs?: number;
 }
 
 /**
@@ -26,6 +27,7 @@ export function createLLMProvider(config: LLMProviderFactoryConfig): LLMProvider
         ...(config.defaultMaxTokens !== undefined
           ? { defaultMaxTokens: config.defaultMaxTokens }
           : {}),
+        ...(config.timeoutMs !== undefined ? { timeoutMs: config.timeoutMs } : {}),
       });
     case 'openai':
       if (!config.apiKey) throw new Error('LLM_API_KEY não configurada para o provider openai.');
@@ -35,6 +37,7 @@ export function createLLMProvider(config: LLMProviderFactoryConfig): LLMProvider
         ...(config.defaultMaxTokens !== undefined
           ? { defaultMaxTokens: config.defaultMaxTokens }
           : {}),
+        ...(config.timeoutMs !== undefined ? { timeoutMs: config.timeoutMs } : {}),
       });
     case 'fake':
       return new FakeLLMProvider({ model: config.model });

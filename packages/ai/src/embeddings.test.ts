@@ -44,6 +44,14 @@ void describe('computeEmbeddingHash', () => {
       );
     }
   });
+
+  void it('separa os campos com NUL para evitar colisão de concatenação', () => {
+    // Com o separador NUL (U+0000), ('ab','') e ('a','b') geram canônicas
+    // distintas; sem separador (concatenação pura) ambas colidiriam em 'ab...'.
+    const a = computeEmbeddingHash('ab', '', 'm', 1536, 'v1');
+    const b = computeEmbeddingHash('a', 'b', 'm', 1536, 'v1');
+    assert.notEqual(a, b);
+  });
 });
 
 void describe('embeddingsPerTerm', () => {

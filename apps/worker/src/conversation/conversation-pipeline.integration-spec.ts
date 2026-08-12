@@ -10,7 +10,9 @@ import {
   type MessageRole,
   PrismaClient,
   ProcessingStatus,
+  PropositionAuthorRole,
   PropositionType,
+  RoleCode,
   TextExtractionStatus,
 } from '@fiscaliza/database';
 import {
@@ -43,6 +45,7 @@ describe('ConversationAnswerPipeline com PostgreSQL', () => {
   const propositionIds: string[] = [];
   const conversationIds: string[] = [];
   const userIds: string[] = [];
+  const councilorIds: string[] = [];
   let scenarioYear = 2298;
 
   beforeAll(async () => {
@@ -55,6 +58,7 @@ describe('ConversationAnswerPipeline com PostgreSQL', () => {
     });
     await prisma.conversation.deleteMany({ where: { id: { in: conversationIds } } });
     await prisma.proposition.deleteMany({ where: { id: { in: propositionIds } } });
+    await prisma.councilor.deleteMany({ where: { id: { in: councilorIds } } });
     await prisma.user.deleteMany({ where: { id: { in: userIds } } });
     await prisma.document.deleteMany({ where: { id: { in: documentIds } } });
     await prisma.$disconnect();
@@ -62,9 +66,12 @@ describe('ConversationAnswerPipeline com PostgreSQL', () => {
 
   it('resolve perguntas estruturadas sem chamar o LLM', async () => {
     const { documentId } = await createIndexedDocument('Conteúdo irrelevante para o status.');
-    const { messages } = await createConversationFixture(await createProposition([documentId]), [
-      { role: 'USER', content: 'Qual o status da proposição?' },
-    ]);
+    const { userId, councilorId } = await createAuthorizedCouncilorUser();
+    const { messages } = await createConversationFixture(
+      await createProposition([documentId], councilorId),
+      [{ role: 'USER', content: 'Qual o status da proposição?' }],
+      userId,
+    );
     const provider = new FakeLLMProvider();
 
     const pipeline = new ConversationAnswerPipeline(prisma, provider, embeddings, config, logger);
@@ -87,10 +94,13 @@ describe('ConversationAnswerPipeline com PostgreSQL', () => {
 
   it('gera resposta RAG com fonte validada a partir do documento autorizado', async () => {
     const doc = await createIndexedDocument('A frota é composta por 12 veículos.');
-    const proposition = await createProposition([doc.documentId]);
-    const { messages } = await createConversationFixture(proposition, [
-      { role: 'USER', content: 'Quantos veículos existem na frota?' },
-    ]);
+    const { userId, councilorId } = await createAuthorizedCouncilorUser();
+    const proposition = await createProposition([doc.documentId], councilorId);
+    const { messages } = await createConversationFixture(
+      proposition,
+      [{ role: 'USER', content: 'Quantos veículos existem na frota?' }],
+      userId,
+    );
     const provider = new FakeLLMProvider();
     provider.queueStructured({
       answer: 'A frota tem 12 veículos.',
@@ -126,10 +136,13 @@ describe('ConversationAnswerPipeline com PostgreSQL', () => {
 
   it('rebaixa para evidência insuficiente quando o modelo cita fonte inventada', async () => {
     const doc = await createIndexedDocument('A frota é composta por 12 veículos.');
-    const proposition = await createProposition([doc.documentId]);
-    const { messages } = await createConversationFixture(proposition, [
-      { role: 'USER', content: 'Quantos veículos existem na frota?' },
-    ]);
+    const { userId, councilorId } = await createAuthorizedCouncilorUser();
+    const proposition = await createProposition([doc.documentId], councilorId);
+    const { messages } = await createConversationFixture(
+      proposition,
+      [{ role: 'USER', content: 'Quantos veículos existem na frota?' }],
+      userId,
+    );
     const provider = new FakeLLMProvider();
     provider.queueStructured({
       answer: 'A frota tem 12 veículos.',
@@ -196,10 +209,13 @@ describe('ConversationAnswerPipeline com PostgreSQL', () => {
 
   it('ignora processamento duplicado de uma mensagem já concluída', async () => {
     const doc = await createIndexedDocument('A frota é composta por 12 veículos.');
-    const proposition = await createProposition([doc.documentId]);
-    const { messages } = await createConversationFixture(proposition, [
-      { role: 'USER', content: 'Quantos veículos existem na frota?' },
-    ]);
+    const { userId, councilorId } = await createAuthorizedCouncilorUser();
+    const proposition = await createProposition([doc.documentId], councilorId);
+    const { messages } = await createConversationFixture(
+      proposition,
+      [{ role: 'USER', content: 'Quantos veículos existem na frota?' }],
+      userId,
+    );
     const provider = new FakeLLMProvider();
     provider.queueStructured({
       answer: 'A frota tem 12 veículos.',
@@ -221,6 +237,47 @@ describe('ConversationAnswerPipeline com PostgreSQL', () => {
       where: { id: messages[1]!.id },
     });
     expect(answer.status).toBe(ConversationMessageStatus.COMPLETED);
+  });
+
+  it('marca FAILED sem chamar providers quando o acesso à proposição foi revogado entre envio e processamento (mandatory)', async () => {
+    const doc = await createIndexedDocument('A frota é composta por 12 veículos.');
+    const { userId, councilorId } = await createAuthorizedCouncilorUser();
+    const proposition = await createProposition([doc.documentId], councilorId);
+    const { messages } = await createConversationFixture(
+      proposition,
+      [{ role: 'USER', content: 'Quantos veículos existem na frota?' }],
+      userId,
+    );
+    // The conversation (and its question) already exists; the authorship is
+    // revoked before the worker processes the message. The answer must fail
+    // WITHOUT sending any document content to the LLM or embedding provider.
+    await prisma.propositionAuthor.deleteMany({
+      where: { propositionId: proposition.id },
+    });
+    const provider = new FakeLLMProvider();
+    provider.queueStructured({
+      answer: 'A frota tem 12 veículos.',
+      sources: [
+        {
+          documentPageId: doc.pageId,
+          pageNumber: 1,
+          excerpt: 'A frota é composta por 12 veículos.',
+        },
+      ],
+    });
+    const pipeline = new ConversationAnswerPipeline(prisma, provider, embeddings, config, logger);
+    await pipeline.process(messages[1]!.id, 'revoked');
+
+    const answer = await prisma.conversationMessage.findUniqueOrThrow({
+      where: { id: messages[1]!.id },
+    });
+    expect(answer.status).toBe(ConversationMessageStatus.FAILED);
+    expect(answer.failureReason).toContain('revogado');
+    expect(provider.structuredCallCount).toBe(0);
+    const usages = await prisma.aIUsage.count({
+      where: { conversationMessageId: answer.id },
+    });
+    expect(usages).toBe(0);
   });
 
   async function createIndexedDocument(content: string) {
@@ -287,7 +344,34 @@ describe('ConversationAnswerPipeline com PostgreSQL', () => {
     return { documentId: document.id, attemptId, pageId: page.id };
   }
 
-  async function createProposition(linkedDocumentIds: string[]) {
+  async function createAuthorizedCouncilorUser() {
+    const userId = randomUUID();
+    userIds.push(userId);
+    const role = await prisma.role.upsert({
+      where: { code: RoleCode.COUNCILOR },
+      update: {},
+      create: { code: RoleCode.COUNCILOR, name: 'Vereador' },
+    });
+    await prisma.user.create({
+      data: {
+        id: userId,
+        email: `${randomUUID()}@test.local`,
+        name: 'Vereador Sintético',
+        passwordHash: 'x',
+        status: 'ACTIVE',
+        councilor: { create: { displayName: 'Vereador Sintético' } },
+        roles: { create: { roleId: role.id } },
+      },
+    });
+    const user = await prisma.user.findUniqueOrThrow({
+      where: { id: userId },
+      include: { councilor: true },
+    });
+    councilorIds.push(user.councilor!.id);
+    return { userId, councilorId: user.councilor!.id };
+  }
+
+  async function createProposition(linkedDocumentIds: string[], authorCouncilorId?: string) {
     scenarioYear += 1;
     const proposition = await prisma.proposition.create({
       data: {
@@ -300,6 +384,16 @@ describe('ConversationAnswerPipeline com PostgreSQL', () => {
         documents: {
           create: linkedDocumentIds.map((documentId) => ({ documentId, role: 'PRIMARY' })),
         },
+        ...(authorCouncilorId
+          ? {
+              authors: {
+                create: {
+                  councilorId: authorCouncilorId,
+                  role: PropositionAuthorRole.PRIMARY,
+                },
+              },
+            }
+          : {}),
       },
     });
     propositionIds.push(proposition.id);
@@ -309,21 +403,24 @@ describe('ConversationAnswerPipeline com PostgreSQL', () => {
   async function createConversationFixture(
     proposition: { id: string } | null,
     messages: Array<{ role: 'USER'; content: string }>,
+    userId?: string,
   ) {
-    const userId = randomUUID();
-    userIds.push(userId);
-    await prisma.user.create({
-      data: {
-        id: userId,
-        email: `${randomUUID()}@test.local`,
-        name: 'Vereador Sintético',
-        passwordHash: 'x',
-        status: 'ACTIVE',
-      },
-    });
+    const conversationUserId = userId ?? randomUUID();
+    if (!userId) {
+      userIds.push(conversationUserId);
+      await prisma.user.create({
+        data: {
+          id: conversationUserId,
+          email: `${randomUUID()}@test.local`,
+          name: 'Vereador Sintético',
+          passwordHash: 'x',
+          status: 'ACTIVE',
+        },
+      });
+    }
     const conversation = await prisma.conversation.create({
       data: {
-        userId,
+        userId: conversationUserId,
         channel: ConversationChannel.WEB,
         title: 'Conversa de teste',
         propositionId: proposition?.id ?? null,

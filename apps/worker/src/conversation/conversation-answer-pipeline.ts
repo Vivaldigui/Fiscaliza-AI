@@ -10,12 +10,18 @@ import {
   type LLMProvider,
   type LLMUsage,
 } from '@fiscaliza/ai';
-import { Prisma, type PrismaClient } from '@fiscaliza/database';
+import { Prisma, type PrismaClient, RoleCode } from '@fiscaliza/database';
 import type { WorkerConfig } from '../config';
 import type { StructuredLogger } from '../logger';
 import { excerptExistsOnPage } from '../ai/evidence-validator';
 import { AuthorizedRetriever, type RetrievedPage } from './retrieval';
 import { resolveStructuredAnswer, type StructuredQueryData } from './structured-answers';
+
+/**
+ * Roles that may read any proposition, mirroring the API's
+ * AuthorizationService. The worker re-validates access at processing time.
+ */
+const BROAD_READ_ROLES: RoleCode[] = [RoleCode.ADMIN, RoleCode.SECRETARIAT, RoleCode.AUDITOR];
 
 interface ValidatedSource {
   documentId: string;
@@ -74,42 +80,54 @@ export class ConversationAnswerPipeline {
       await this.fail(messageId, 'Chat web desabilitado (CHAT_ENABLED=false).');
       return;
     }
-    const message = await this.prisma.conversationMessage.findUnique({
-      where: { id: messageId },
-      include: { conversation: { include: { proposition: true } } },
-    });
-    if (!message || message.role !== 'ASSISTANT') {
-      this.logger.warn('Mensagem de resposta não encontrada ou papel inválido.', {
-        messageId,
-        jobId,
-        stage: 'conversation',
-      });
-      return;
-    }
-    if (message.status === 'COMPLETED') {
-      this.logger.info('Resposta já concluída; job duplicado ignorado.', {
-        messageId,
-        jobId,
-        stage: 'conversation',
-      });
-      return;
-    }
-    const userMessage = await this.prisma.conversationMessage.findFirst({
-      where: {
-        conversationId: message.conversationId,
-        role: 'USER',
-        inputHash: message.inputHash,
-      },
-      orderBy: { createdAt: 'asc' },
-    });
-    if (!userMessage) {
-      await this.fail(messageId, 'Mensagem do usuário correspondente não encontrada.');
-      return;
-    }
-    const question = userMessage.content;
-    const proposition = message.conversation.proposition;
-
     try {
+      // Toda a leitura e todo o processamento ficam dentro do try/catch: uma
+      // falha de banco em qualquer ponto (inclusive na re-checagem de
+      // autorização) chama fail() em vez de deixar a mensagem PENDING para
+      // sempre quando os retries do BullMQ se esgotam.
+      const message = await this.prisma.conversationMessage.findUnique({
+        where: { id: messageId },
+        include: { conversation: { include: { proposition: true } } },
+      });
+      if (!message || message.role !== 'ASSISTANT') {
+        this.logger.warn('Mensagem de resposta não encontrada ou papel inválido.', {
+          messageId,
+          jobId,
+          stage: 'conversation',
+        });
+        return;
+      }
+      if (message.status === 'COMPLETED') {
+        this.logger.info('Resposta já concluída; job duplicado ignorado.', {
+          messageId,
+          jobId,
+          stage: 'conversation',
+        });
+        return;
+      }
+      const userMessage = await this.prisma.conversationMessage.findFirst({
+        where: {
+          conversationId: message.conversationId,
+          role: 'USER',
+          inputHash: message.inputHash,
+        },
+        orderBy: { createdAt: 'asc' },
+      });
+      if (!userMessage) {
+        await this.fail(messageId, 'Mensagem do usuário correspondente não encontrada.');
+        return;
+      }
+      const question = userMessage.content;
+      const proposition = message.conversation.proposition;
+
+      if (
+        proposition &&
+        !(await this.userCanReadProposition(message.conversation.userId, proposition.id))
+      ) {
+        await this.fail(messageId, 'Acesso à proposição revogado após o envio da pergunta.');
+        return;
+      }
+
       if (proposition) {
         const structured = await this.loadStructuredQueryData(proposition.id);
         const resolved = resolveStructuredAnswer(question, structured);
@@ -133,6 +151,35 @@ export class ConversationAnswerPipeline {
       await this.fail(messageId, this.describeError(error));
       throw error;
     }
+  }
+
+  /**
+   * Re-validates, at processing time, that the user who sent the question may
+   * still read the referenced proposition. The API checks access when the
+   * message is created, but the worker runs asynchronously — the user's role,
+   * councilor profile or authorship could have been revoked in between. This
+   * mirrors the API's AuthorizationService.canReadProposition so that no
+   * document content is sent to the LLM/embedding provider after access has
+   * been revoked. Conversations without a proposition are unaffected.
+   */
+  private async userCanReadProposition(userId: string, propositionId: string): Promise<boolean> {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: {
+        councilor: { select: { id: true } },
+        roles: { select: { role: { select: { code: true } } } },
+      },
+    });
+    if (!user) return false;
+    const codes = user.roles.map(({ role }) => role.code);
+    if (codes.some((code) => BROAD_READ_ROLES.includes(code))) return true;
+    const councilorId = user.councilor?.id ?? null;
+    if (councilorId === null || !codes.includes(RoleCode.COUNCILOR)) return false;
+    const authors = await this.prisma.propositionAuthor.findMany({
+      where: { propositionId },
+      select: { councilorId: true },
+    });
+    return authors.some((author) => author.councilorId === councilorId);
   }
 
   private async loadStructuredQueryData(propositionId: string): Promise<StructuredQueryData> {

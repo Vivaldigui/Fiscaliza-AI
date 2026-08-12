@@ -74,6 +74,7 @@ async function bootstrap(): Promise<void> {
   const llmProvider = createLLMProvider({
     provider: config.LLM_PROVIDER,
     model: config.LLM_MODEL,
+    timeoutMs: config.AI_REQUEST_TIMEOUT_MS,
     ...(config.LLM_API_KEY ? { apiKey: config.LLM_API_KEY } : {}),
   });
   const embeddingsProvider = createEmbeddingProvider({

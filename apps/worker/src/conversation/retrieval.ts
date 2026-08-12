@@ -80,24 +80,29 @@ export class AuthorizedRetriever {
   ): Promise<RetrievedPage[]> {
     if (authorizedDocumentIds.length === 0) return [];
     const rows = await this.prisma.$queryRaw<RetrievedPageRow[]>(Prisma.sql`
-      SELECT DISTINCT ON (c.page_id)
-        c.page_id::text AS "pageId",
-        c.page_number AS "pageNumber",
-        d.id::text AS "documentId",
-        d.original_name AS "documentLabel",
-        c.content AS "content"
-      FROM "document_chunks" c
-      JOIN "document_pages" p ON p.id = c.page_id
-      JOIN "document_processing_attempts" pa ON pa.id = c.processing_attempt_id
-      JOIN "documents" d ON d.id = c.document_id
-      WHERE c.embedding_hash IS NOT NULL
-        AND c.embedding_version = ${this.version}
-        AND d.id IN (${Prisma.join(
-          authorizedDocumentIds.map((documentId) => Prisma.sql`${documentId}::uuid`),
-        )})
-        AND pa.attempt = d.processing_attempt
-        AND pa.status = 'COMPLETED'
-      ORDER BY c.page_id, c.embedding <=> ${queryVector}::vector
+      SELECT "pageId", "pageNumber", "documentId", "documentLabel", "content"
+      FROM (
+        SELECT DISTINCT ON (c.page_id)
+          c.page_id::text AS "pageId",
+          c.page_number AS "pageNumber",
+          d.id::text AS "documentId",
+          d.original_name AS "documentLabel",
+          c.content AS "content",
+          c.embedding <=> ${queryVector}::vector AS "distance"
+        FROM "document_chunks" c
+        JOIN "document_pages" p ON p.id = c.page_id
+        JOIN "document_processing_attempts" pa ON pa.id = c.processing_attempt_id
+        JOIN "documents" d ON d.id = c.document_id
+        WHERE c.embedding_hash IS NOT NULL
+          AND c.embedding_version = ${this.version}
+          AND d.id IN (${Prisma.join(
+            authorizedDocumentIds.map((documentId) => Prisma.sql`${documentId}::uuid`),
+          )})
+          AND pa.attempt = d.processing_attempt
+          AND pa.status = 'COMPLETED'
+        ORDER BY c.page_id, c.embedding <=> ${queryVector}::vector
+      ) ranked
+      ORDER BY ranked."distance"
       LIMIT ${this.config.CONVERSATION_RAG_TOP_K}
     `);
     return rows.map((row) => ({

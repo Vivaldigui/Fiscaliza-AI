@@ -14,6 +14,8 @@ export interface AnthropicProviderConfig {
   apiKey: string;
   model: string;
   defaultMaxTokens?: number;
+  /** Request timeout in ms; mirrors EMBEDDINGS_TIMEOUT_MS for embeddings. */
+  timeoutMs?: number;
 }
 
 export class AnthropicProvider implements LLMProvider {
@@ -27,7 +29,7 @@ export class AnthropicProvider implements LLMProvider {
     if (!config.model) throw new Error('LLM_MODEL não configurado');
     this.model = config.model;
     this.defaultMaxTokens = config.defaultMaxTokens ?? 4096;
-    this.client = new Anthropic({ apiKey: config.apiKey });
+    this.client = new Anthropic({ apiKey: config.apiKey, timeout: config.timeoutMs });
   }
 
   async generateStructured<TSchema extends z.ZodTypeAny>(

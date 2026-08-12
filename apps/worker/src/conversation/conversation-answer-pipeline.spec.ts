@@ -1,5 +1,5 @@
 import { INSUFFICIENT_EVIDENCE_ANSWER, WEB_ANSWER_VERSION, type LLMProvider } from '@fiscaliza/ai';
-import type { PrismaClient } from '@fiscaliza/database';
+import { type PrismaClient, RoleCode } from '@fiscaliza/database';
 import type { WorkerConfig } from '../config';
 import { StructuredLogger } from '../logger';
 import { ConversationAnswerPipeline } from './conversation-answer-pipeline';
@@ -36,6 +36,8 @@ function buildPrisma() {
       update: jest.fn(),
       updateMany: jest.fn(),
     },
+    user: { findUnique: jest.fn() },
+    propositionAuthor: { findMany: jest.fn() },
     conversation: { update: jest.fn() },
     aIUsage: { create: jest.fn() },
     $transaction: jest.fn(),
@@ -130,6 +132,116 @@ describe('ConversationAnswerPipeline (unit)', () => {
     expect(mock.conversationMessage.updateMany).toHaveBeenCalledWith({
       where: { id: messageId, status: 'PENDING' },
       data: expect.objectContaining({ status: 'FAILED' }),
+    });
+  });
+
+  it('marca FAILED e não chama providers quando o acesso à proposição foi revogado após o envio (mandatory)', async () => {
+    const mock = buildPrisma();
+    const propositionId = '30000000-0000-4000-8000-000000000001';
+    mock.conversationMessage.findUnique.mockResolvedValue({
+      id: messageId,
+      conversationId,
+      role: 'ASSISTANT',
+      content: '',
+      inputHash: 'hash-do-usuario',
+      status: 'PENDING',
+      conversation: {
+        id: conversationId,
+        userId: '40000000-0000-4000-8000-000000000001',
+        proposition: { id: propositionId },
+      },
+    });
+    mock.conversationMessage.findFirst.mockResolvedValue({
+      content: 'Quantos veículos existem na frota?',
+    });
+    // O usuário existe, mas perdeu o perfil de vereador e o papel COUNCILOR.
+    mock.user.findUnique.mockResolvedValue({ councilor: null, roles: [] });
+    const provider = { generateStructured: jest.fn() } as unknown as LLMProvider;
+    const embed = jest.fn();
+
+    await new ConversationAnswerPipeline(
+      mock as unknown as PrismaClient,
+      provider,
+      { name: 'fake', model: 'fake', dimension: 8, embed },
+      config,
+      logger,
+    ).process(messageId, 'revoked');
+
+    expect(provider.generateStructured).not.toHaveBeenCalled();
+    expect(embed).not.toHaveBeenCalled();
+    expect(mock.propositionAuthor.findMany).not.toHaveBeenCalled();
+    expect(mock.conversationMessage.updateMany).toHaveBeenCalledWith({
+      where: { id: messageId, status: 'PENDING' },
+      data: expect.objectContaining({
+        status: 'FAILED',
+        failureReason: expect.stringContaining('revogado'),
+      }),
+    });
+  });
+
+  it('marca FAILED quando o usuário mantém o papel, mas deixou de ser autor da proposição', async () => {
+    const mock = buildPrisma();
+    const propositionId = '30000000-0000-4000-8000-000000000002';
+    mock.conversationMessage.findUnique.mockResolvedValue({
+      id: messageId,
+      conversationId,
+      role: 'ASSISTANT',
+      content: '',
+      inputHash: 'hash-do-usuario',
+      status: 'PENDING',
+      conversation: {
+        id: conversationId,
+        userId: '40000000-0000-4000-8000-000000000002',
+        proposition: { id: propositionId },
+      },
+    });
+    mock.conversationMessage.findFirst.mockResolvedValue({
+      content: 'Quantos veículos existem na frota?',
+    });
+    mock.user.findUnique.mockResolvedValue({
+      councilor: { id: '50000000-0000-4000-8000-000000000001' },
+      roles: [{ role: { code: RoleCode.COUNCILOR } }],
+    });
+    mock.propositionAuthor.findMany.mockResolvedValue([{ councilorId: 'outro-vereador' }]);
+    const provider = { generateStructured: jest.fn() } as unknown as LLMProvider;
+    const embed = jest.fn();
+
+    await new ConversationAnswerPipeline(
+      mock as unknown as PrismaClient,
+      provider,
+      { name: 'fake', model: 'fake', dimension: 8, embed },
+      config,
+      logger,
+    ).process(messageId, 'revoked-authorship');
+
+    expect(provider.generateStructured).not.toHaveBeenCalled();
+    expect(embed).not.toHaveBeenCalled();
+    expect(mock.conversationMessage.updateMany).toHaveBeenCalledWith({
+      where: { id: messageId, status: 'PENDING' },
+      data: expect.objectContaining({ status: 'FAILED' }),
+    });
+  });
+
+  it('marca FAILED quando uma falha de banco atinge a leitura inicial da mensagem', async () => {
+    // Uma rejeição em qualquer ponto do processo deve passar pelo catch e
+    // chamar fail() — nunca deixar a mensagem PENDING para sempre (mandatory).
+    const mock = buildPrisma();
+    mock.conversationMessage.findUnique.mockRejectedValue(new Error('banco indisponível'));
+    const provider = { generateStructured: jest.fn() } as unknown as LLMProvider;
+
+    const pipeline = new ConversationAnswerPipeline(
+      mock as unknown as PrismaClient,
+      provider,
+      { name: 'fake', model: 'fake', dimension: 8, embed: jest.fn() },
+      config,
+      logger,
+    );
+
+    await expect(pipeline.process(messageId, 'db-fail')).rejects.toThrow('banco indisponível');
+    expect(provider.generateStructured).not.toHaveBeenCalled();
+    expect(mock.conversationMessage.updateMany).toHaveBeenCalledWith({
+      where: { id: messageId, status: 'PENDING' },
+      data: expect.objectContaining({ status: 'FAILED', failureReason: 'banco indisponível' }),
     });
   });
 });

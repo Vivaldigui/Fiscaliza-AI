@@ -36,6 +36,11 @@ function unitVector(component: number): number[] {
   return vector;
 }
 
+/** Uniform 0.25 vector: similarity to any spike vector of the same norm. */
+function flatVector(): number[] {
+  return new Array<number>(DIMENSION).fill(0.25);
+}
+
 describe('AuthorizedRetriever com PostgreSQL/pgvector', () => {
   const prisma = new PrismaClient();
   const suffix = randomUUID();
@@ -205,6 +210,51 @@ describe('AuthorizedRetriever com PostgreSQL/pgvector', () => {
     expect(pages).toHaveLength(0);
   });
 
+  it('ordena páginas autorizadas por relevância semântica, não por UUID (mandatory)', async () => {
+    // Three authorized pages whose UUIDs sort in the OPPOSITE order of their
+    // relevance to the query. A `DISTINCT ON ... ORDER BY c.page_id` returns
+    // them in UUID order and LIMIT cuts by UUID; the fix re-ranks by the
+    // precomputed distance in an outer query before LIMIT.
+    const pageA = '00000000-0000-4000-8000-0000000000aa';
+    const pageB = '00000000-0000-4000-8000-0000000000bb';
+    const pageC = '00000000-0000-4000-8000-0000000000cc';
+    const d1 = randomUUID();
+    const d2 = randomUUID();
+    const d3 = randomUUID();
+    const { attemptId: a1 } = await createPageFixtureWithIds(
+      d1,
+      pageA,
+      'Conteúdo menos relevante.',
+    );
+    const { attemptId: a2 } = await createPageFixtureWithIds(d2, pageB, 'Conteúdo intermediário.');
+    const { attemptId: a3 } = await createPageFixtureWithIds(d3, pageC, 'Conteúdo mais relevante.');
+    await createIndexedChunk(d1, a1, pageA, 1, 1, 'Conteúdo menos relevante.', unitVector(1));
+    await createIndexedChunk(d2, a2, pageB, 1, 1, 'Conteúdo intermediário.', flatVector());
+    await createIndexedChunk(d3, a3, pageC, 1, 1, 'Conteúdo mais relevante.', unitVector(0));
+    await createProposition([d1, d2, d3]);
+
+    const pages = await retriever!.retrieveTopPages(unitVector(0), [d1, d2, d3]);
+    // Relevância (distância cosseno ao unitVector(0)): C = 0, B ≈ 0.008,
+    // A ≈ 0.016. A ordem esperada é o inverso da ordem dos UUIDs (A < B < C),
+    // provando que o ranking relega a ordenação por UUID.
+    expect(pages.map((page) => page.pageId)).toEqual([pageC, pageB, pageA]);
+
+    // With topK=2 the two most relevant pages survive; under the old ORDER BY
+    // c.page_id the LIMIT would drop the most relevant page (C) entirely.
+    const limited = new AuthorizedRetriever(
+      prisma,
+      {
+        name: 'spec-embedding',
+        model: 'never-used',
+        dimension: DIMENSION,
+        embed: () => Promise.reject(new Error('não deve chamar o provider nesta spec')),
+      },
+      { ...config, CONVERSATION_RAG_TOP_K: 2 } as unknown as WorkerConfig,
+    );
+    const limitedPages = await limited.retrieveTopPages(unitVector(0), [d1, d2, d3]);
+    expect(limitedPages.map((page) => page.pageId)).toEqual([pageC, pageB]);
+  });
+
   async function createPageFixture(text: string) {
     const id = randomUUID();
     documentIds.push(id);
@@ -245,6 +295,49 @@ describe('AuthorizedRetriever com PostgreSQL/pgvector', () => {
       include: { pages: true },
     });
     return { documentId: document.id, attemptId, pageId: document.pages[0]!.id };
+  }
+
+  /** Like `createPageFixture`, but with caller-controlled document and page ids. */
+  async function createPageFixtureWithIds(documentId: string, pageId: string, text: string) {
+    documentIds.push(documentId);
+    const attemptId = randomUUID();
+    await prisma.document.create({
+      data: {
+        id: documentId,
+        originalName: `documento-${documentId}.pdf`,
+        mimeType: 'application/pdf',
+        storageKey: `documents/${scenarioYear}/${documentId}/original.pdf`,
+        sha256: createHash('sha256').update(`${suffix}-${documentId}`).digest('hex'),
+        sizeBytes: 1000,
+        pageCount: 1,
+        processingAttempt: 1,
+        processingStatus: ProcessingStatus.COMPLETED,
+        securityStatus: DocumentSecurityStatus.CLEAN,
+        textExtractionStatus: TextExtractionStatus.COMPLETED,
+        ocrStatus: OcrStatus.NOT_REQUIRED,
+        processingAttempts: {
+          create: {
+            id: attemptId,
+            attempt: 1,
+            trigger: DocumentProcessingTrigger.UPLOAD,
+            status: DocumentAttemptStatus.COMPLETED,
+          },
+        },
+        pages: {
+          create: {
+            id: pageId,
+            processingAttemptId: attemptId,
+            pageNumber: 1,
+            extractedText: text,
+            effectiveText: text,
+            effectiveTextSource: DocumentTextSource.EXTRACTED,
+            characterCount: text.length,
+          },
+        },
+      },
+      select: { id: true },
+    });
+    return { attemptId };
   }
 
   async function reprocessFixture(documentId: string, text: string) {
@@ -318,7 +411,12 @@ describe('AuthorizedRetriever com PostgreSQL/pgvector', () => {
         subject: `Requerimento de integração ${suffix} ${scenarioYear}`,
         status: 'AWAITING_RESPONSE',
         documents: {
-          create: linkedDocumentIds.map((documentId) => ({ documentId, role: 'PRIMARY' })),
+          // O índice parcial `proposition_documents_one_primary_idx` permite
+          // apenas um documento PRIMARY por proposição; os demais são anexos.
+          create: linkedDocumentIds.map((documentId, index) => ({
+            documentId,
+            role: index === 0 ? 'PRIMARY' : 'ATTACHMENT',
+          })),
         },
       },
     });
