@@ -92,6 +92,8 @@ A validação usou o container PostgreSQL descartável `fiscaliza-5a-test-pg` (p
 
 `.github/workflows/ci.yml` já rodava `--filter @fiscaliza/worker test:integration` depois da API; com a Fase 5A, esse job passa a executar também as specs de retrieval/conversa em PostgreSQL real. Nenhuma chave real de LLM ou embeddings é usada; `FakeLLMProvider`/`FakeEmbeddingProvider` cobrem 100% dos testes automatizados, e o guard de configuração valida que `fake` nunca fica ativo em produção.
 
+**Entrega final:** após CI totalmente verde (jobs `quality` e `clean-migration` no PR #5, run `31557481260`), o PR #5 foi mergeado em `origin/main` via merge commit `93fc30f`; o CI pós-merge de `main` (run `31557592776`) concluiu com sucesso. O branch `agent/fase-5a-rag-web` foi preservado.
+
 ## Teste real do provider
 
 Assim como na Fase 4, nenhuma chave real de `EMBEDDINGS_API_KEY` estava disponível neste ambiente. **Nenhum smoke test com o `OpenAIEmbeddingProvider` real foi executado.** A integração runtime está implementada, tipada e buildada, mas a validação de ponta a end com uma chave real (índice um documento sintético e consulta via chat) fica pendente e deve ser executada manualmente antes de qualquer uso em produção, junto com o smoke do `OpenAIProvider` de chat já registrado na Fase 4.
