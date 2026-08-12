@@ -1,5 +1,5 @@
 {
-  "name": "Fiscaliza AI - WhatsApp inbound (exemplo inativo)",
+  "name": "Fiscaliza AI - WhatsApp inbound (exemplo importável)",
   "active": false,
   "nodes": [
     {
@@ -10,32 +10,79 @@
       "parameters": {
         "httpMethod": "POST",
         "path": "fiscaliza/whatsapp/inbound",
-        "responseMode": "lastNode"
+        "responseMode": "responseNode",
+        "options": {}
+      }
+    },
+    {
+      "name": "Normalizar payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [280, 0],
+      "parameters": {
+        "jsCode": "// Normaliza o envelope da UAZAPI para o contrato canônico do backend.\n// Nenhuma regra de autorização/idempotência/domínio vive aqui.\nconst raw = $input.first().json;\nconst text = raw.text ?? raw.message ?? raw.body ?? '';\nconst phone = String(raw.phone ?? raw.from ?? raw.sender ?? '').replace(/\\s/g, '');\nconst messageId = String(raw.messageId ?? raw.id ?? raw.message_id ?? 'msg-' + Date.now());\nreturn [{\n  json: {\n    messageId,\n    phone,\n    text,\n    timestamp: new Date().toISOString(),\n    instance: raw.instance ?? 'camara-principal',\n    metadata: raw.metadata ?? {}\n  }\n}];"
+      }
+    },
+    {
+      "name": "Assinar e encaminhar ao backend",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [560, 0],
+      "parameters": {
+        "jsCode": "// HMAC-SHA256 sobre `<timestamp>.<body>` usando o segredo compartilhado.\n// Variáveis necessárias: FISCALIZA_API_URL, FISCALIZA_N8N_SECRET.\nconst crypto = require('crypto');\nconst item = $input.first().json;\nconst timestamp = new Date().toISOString();\nconst body = JSON.stringify(item);\nconst signature = crypto\n  .createHmac('sha256', $env.FISCALIZA_N8N_SECRET)\n  .update(timestamp + '.' + body)\n  .digest('hex');\nreturn [{ json: { timestamp, signature, body, item } }];"
       }
     },
     {
       "name": "Backend inbound",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [280, 0],
+      "position": [840, 0],
       "parameters": {
         "method": "POST",
         "url": "={{$env.FISCALIZA_API_URL + '/integrations/whatsapp/inbound'}}",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
-            { "name": "x-integration-secret", "value": "={{$env.FISCALIZA_N8N_SECRET}}" }
+            { "name": "x-fiscaliza-timestamp", "value": "={{$json.timestamp}}" },
+            {
+              "name": "x-fiscaliza-signature",
+              "value": "={{'sha256=' + $json.signature}}"
+            },
+            { "name": "x-request-id", "value": "={{$execution?.id}}" }
           ]
         },
         "sendBody": true,
         "contentType": "raw",
         "rawContentType": "application/json",
-        "body": "={{JSON.stringify($json)}}"
+        "body": "={{$json.body}}",
+        "timeout": 10000
+      }
+    },
+    {
+      "name": "Resposta ao webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [1120, 0],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {}
       }
     }
   ],
   "connections": {
-    "UAZAPI Webhook": { "main": [[{ "node": "Backend inbound", "type": "main", "index": 0 }]] }
+    "UAZAPI Webhook": {
+      "main": [[{ "node": "Normalizar payload", "type": "main", "index": 0 }]]
+    },
+    "Normalizar payload": {
+      "main": [[{ "node": "Assinar e encaminhar ao backend", "type": "main", "index": 0 }]]
+    },
+    "Assinar e encaminhar ao backend": {
+      "main": [[{ "node": "Backend inbound", "type": "main", "index": 0 }]]
+    },
+    "Backend inbound": {
+      "main": [[{ "node": "Resposta ao webhook", "type": "main", "index": 0 }]]
+    }
   },
   "settings": { "executionOrder": "v1" }
 }

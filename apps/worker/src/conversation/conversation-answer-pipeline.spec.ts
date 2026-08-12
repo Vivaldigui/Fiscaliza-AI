@@ -38,7 +38,10 @@ function buildPrisma() {
     },
     user: { findUnique: jest.fn() },
     propositionAuthor: { findMany: jest.fn() },
-    conversation: { update: jest.fn() },
+    conversation: { update: jest.fn(), findUnique: jest.fn() },
+    whatsappIdentity: { findUnique: jest.fn() },
+    notification: { findUnique: jest.fn(), create: jest.fn() },
+    outboxEvent: { create: jest.fn() },
     aIUsage: { create: jest.fn() },
     $transaction: jest.fn(),
   };
@@ -242,6 +245,195 @@ describe('ConversationAnswerPipeline (unit)', () => {
     expect(mock.conversationMessage.updateMany).toHaveBeenCalledWith({
       where: { id: messageId, status: 'PENDING' },
       data: expect.objectContaining({ status: 'FAILED', failureReason: 'banco indisponível' }),
+    });
+  });
+});
+
+describe('ConversationAnswerPipeline (WhatsApp)', () => {
+  const whatsappConfig = {
+    CHAT_ENABLED: true,
+    WHATSAPP_ENABLED: true,
+    CONVERSATION_ANSWER_MAX_RETRIES: 1,
+    WHATSAPP_SESSION_TTL_SECONDS: 3600,
+  } as unknown as WorkerConfig;
+
+  const validIdentity = {
+    id: '20000000-0000-4000-8000-000000000001',
+    phoneNumber: '+5535999999999',
+    instance: 'camara-principal',
+    active: true,
+    verifiedAt: new Date(),
+  };
+
+  function whatsappMessage(overrides: Record<string, unknown> = {}) {
+    return {
+      id: messageId,
+      conversationId,
+      role: 'ASSISTANT',
+      content: '',
+      inputHash: 'hash-do-usuario',
+      status: 'PENDING',
+      conversation: {
+        id: conversationId,
+        userId: '10000000-0000-4000-8000-000000000001',
+        channel: 'WHATSAPP',
+        propositionId: null,
+        whatsappIdentityId: validIdentity.id,
+        whatsappIdentity: { ...validIdentity },
+        proposition: null,
+        ...overrides,
+      },
+    };
+  }
+
+  it('identidade inativa: FAILED sem chamada ao LLM (cenário 8)', async () => {
+    const mock = buildPrisma();
+    mock.conversationMessage.findUnique.mockResolvedValue(
+      whatsappMessage({
+        conversation: {
+          id: conversationId,
+          userId: '10000000-0000-4000-8000-000000000001',
+          channel: 'WHATSAPP',
+          propositionId: null,
+          whatsappIdentityId: validIdentity.id,
+          whatsappIdentity: { ...validIdentity, active: false },
+          proposition: null,
+        },
+      }),
+    );
+    const provider = { generateStructured: jest.fn() } as unknown as LLMProvider;
+    const embed = jest.fn();
+
+    await new ConversationAnswerPipeline(
+      mock as unknown as PrismaClient,
+      provider,
+      { name: 'fake', model: 'fake', dimension: 8, embed },
+      whatsappConfig,
+      logger,
+    ).process(messageId, 'inactive');
+
+    expect(provider.generateStructured).not.toHaveBeenCalled();
+    expect(embed).not.toHaveBeenCalled();
+    expect(mock.conversationMessage.updateMany).toHaveBeenCalledWith({
+      where: { id: messageId, status: 'PENDING' },
+      data: expect.objectContaining({ status: 'FAILED' }),
+    });
+  });
+
+  it('identidade não verificada: FAILED sem chamada ao LLM (cenário 9)', async () => {
+    const mock = buildPrisma();
+    mock.conversationMessage.findUnique.mockResolvedValue(
+      whatsappMessage({
+        conversation: {
+          id: conversationId,
+          userId: '10000000-0000-4000-8000-000000000001',
+          channel: 'WHATSAPP',
+          propositionId: null,
+          whatsappIdentityId: validIdentity.id,
+          whatsappIdentity: { ...validIdentity, verifiedAt: null },
+          proposition: null,
+        },
+      }),
+    );
+    const provider = { generateStructured: jest.fn() } as unknown as LLMProvider;
+
+    await new ConversationAnswerPipeline(
+      mock as unknown as PrismaClient,
+      provider,
+      { name: 'fake', model: 'fake', dimension: 8, embed: jest.fn() },
+      whatsappConfig,
+      logger,
+    ).process(messageId, 'unverified');
+
+    expect(provider.generateStructured).not.toHaveBeenCalled();
+    expect(mock.conversationMessage.updateMany).toHaveBeenCalledWith({
+      where: { id: messageId, status: 'PENDING' },
+      data: expect.objectContaining({ status: 'FAILED' }),
+    });
+  });
+
+  it('identidade revogada entre recebimento e worker: FAILED sem LLM (cenário 11)', async () => {
+    const mock = buildPrisma();
+    mock.conversationMessage.findUnique.mockResolvedValue(whatsappMessage());
+    // A identidade foi desativada entre o recebimento e o processamento.
+    mock.whatsappIdentity.findUnique.mockResolvedValue({
+      ...validIdentity,
+      active: false,
+      councilor: {
+        active: true,
+        userId: '10000000-0000-4000-8000-000000000001',
+        user: { status: 'ACTIVE' },
+      },
+    });
+    const provider = { generateStructured: jest.fn() } as unknown as LLMProvider;
+
+    await new ConversationAnswerPipeline(
+      mock as unknown as PrismaClient,
+      provider,
+      { name: 'fake', model: 'fake', dimension: 8, embed: jest.fn() },
+      whatsappConfig,
+      logger,
+    ).process(messageId, 'revoked-identity');
+
+    expect(provider.generateStructured).not.toHaveBeenCalled();
+    expect(mock.conversationMessage.updateMany).toHaveBeenCalledWith({
+      where: { id: messageId, status: 'PENDING' },
+      data: expect.objectContaining({ status: 'FAILED' }),
+    });
+  });
+
+  it('usuário sem acesso à proposição: FAILED sem chamada ao LLM (cenário 10)', async () => {
+    const propositionId = '30000000-0000-4000-8000-000000000001';
+    const mock = buildPrisma();
+    mock.conversationMessage.findUnique.mockResolvedValue(
+      whatsappMessage({
+        conversation: {
+          id: conversationId,
+          userId: '10000000-0000-4000-8000-000000000001',
+          channel: 'WHATSAPP',
+          propositionId,
+          whatsappIdentityId: validIdentity.id,
+          whatsappIdentity: { ...validIdentity },
+          proposition: { id: propositionId },
+        },
+      }),
+    );
+    mock.conversationMessage.findFirst.mockResolvedValue({
+      content: 'O que não responderam?',
+    });
+    mock.whatsappIdentity.findUnique.mockResolvedValue({
+      ...validIdentity,
+      councilor: {
+        active: true,
+        userId: '10000000-0000-4000-8000-000000000001',
+        user: { status: 'ACTIVE' },
+      },
+    });
+    // Re-load da conversa após o resolver (sem contexto ativo).
+    mock.conversation.findUnique.mockResolvedValue({
+      id: conversationId,
+      userId: '10000000-0000-4000-8000-000000000001',
+      channel: 'WHATSAPP',
+      propositionId,
+      whatsappIdentityId: validIdentity.id,
+      proposition: { id: propositionId },
+    });
+    // Usuário válido mas sem papel COUNCILOR e sem autoria.
+    mock.user.findUnique.mockResolvedValue({ councilor: null, roles: [] });
+    const provider = { generateStructured: jest.fn() } as unknown as LLMProvider;
+
+    await new ConversationAnswerPipeline(
+      mock as unknown as PrismaClient,
+      provider,
+      { name: 'fake', model: 'fake', dimension: 8, embed: jest.fn() },
+      whatsappConfig,
+      logger,
+    ).process(messageId, 'no-access');
+
+    expect(provider.generateStructured).not.toHaveBeenCalled();
+    expect(mock.conversationMessage.updateMany).toHaveBeenCalledWith({
+      where: { id: messageId, status: 'PENDING' },
+      data: expect.objectContaining({ status: 'FAILED' }),
     });
   });
 });

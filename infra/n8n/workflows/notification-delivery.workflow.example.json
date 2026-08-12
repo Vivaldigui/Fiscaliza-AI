@@ -1,0 +1,139 @@
+{
+  "name": "Fiscaliza AI - Entrega de notificações (exemplo importável)",
+  "active": false,
+  "nodes": [
+    {
+      "name": "Backend Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 0],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "fiscaliza/notification-delivery",
+        "responseMode": "responseNode",
+        "options": {
+          "responseData": "allEntries",
+          "includeHeaders": true
+        }
+      }
+    },
+    {
+      "name": "Validar assinatura e timestamp",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [280, 0],
+      "parameters": {
+        "jsCode": "// Valida o webhook do backend: HMAC-SHA256 sobre `<timestamp>.<body>`.\n// Requer expor os headers no nó de webhook e FISCALIZA_N8N_SECRET no env.\n// Em caso de assinatura/timestamp inválidos a execução é abortada.\nconst crypto = require('crypto');\nconst item = $('Backend Webhook').first().json;\nconst headers = item.headers ?? item.request?.headers ?? {};\nconst timestamp = headers['x-fiscaliza-timestamp'];\nconst signature = (headers['x-fiscaliza-signature'] ?? '').replace(/^sha256=/, '');\nif (!timestamp || !signature) throw new Error('Assinatura ausente no webhook do backend');\nif (Math.abs(Date.now() - Date.parse(timestamp)) > 5 * 60 * 1000) throw new Error('Timestamp expirado');\nconst expected = crypto\n  .createHmac('sha256', $env.FISCALIZA_N8N_SECRET)\n  .update(timestamp + '.' + JSON.stringify(item.body ?? item))\n  .digest('hex');\nif (signature !== expected) throw new Error('Assinatura inválida no webhook do backend');\nreturn [{ json: item.body ?? item }];"
+      }
+    },
+    {
+      "name": "Montar mensagem UAZAPI",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [560, 0],
+      "parameters": {
+        "jsCode": "// Constrói o envio UAZAPI. `text`/`phone` vêm do envelope do backend;\n// a chave de idempotência evita duplicação externa.\n// Variáveis necessárias: UAZAPI_SEND_URL, UAZAPI_TOKEN (credential store).\nconst delivery = $input.first().json;\nreturn [{\n  json: {\n    to: delivery.destination?.phone,\n    message: delivery.payload?.text ?? '',\n    idempotencyKey: delivery.idempotencyKey,\n    notificationId: delivery.notificationId,\n    notificationType: delivery.notificationType,\n    metadata: { source: 'fiscaliza-ai' }\n  }\n}];"
+      }
+    },
+    {
+      "name": "Enviar UAZAPI",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [840, 0],
+      "parameters": {
+        "method": "POST",
+        "url": "={{$env.UAZAPI_SEND_URL}}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "={{'Bearer ' + $env.UAZAPI_TOKEN}}" },
+            { "name": "Idempotency-Key", "value": "={{$json.idempotencyKey}}" }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "bodyParameters": {
+          "parameters": [
+            { "name": "number", "value": "={{$json.to}}" },
+            { "name": "text", "value": "={{$json.message}}" },
+            { "name": "messageId", "value": "={{$json.idempotencyKey}}" },
+            { "name": "instance", "value": "={{$json.notificationType}}" }
+          ]
+        },
+        "timeout": 10000,
+        "options": {
+          "batching": { "batch": { "batchSize": 1 } }
+        }
+      }
+    },
+    {
+      "name": "Callback de status",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1120, 0],
+      "parameters": {
+        "jsCode": "// Informa o backend do envio aceito (SENT) com externalMessageId.\n// Variáveis: FISCALIZA_API_URL, FISCALIZA_N8N_SECRET.\nconst crypto = require('crypto');\nconst sent = $input.first().json;\nconst requestBody = JSON.stringify({\n  notificationId: sent.json?.notificationId,\n  idempotencyKey: sent.json?.idempotencyKey,\n  status: 'SENT',\n  externalMessageId: sent.json?.externalMessageId ?? null,\n  timestamp: new Date().toISOString()\n});\nconst timestamp = new Date().toISOString();\nconst signature = crypto\n  .createHmac('sha256', $env.FISCALIZA_N8N_SECRET)\n  .update(timestamp + '.' + requestBody)\n  .digest('hex');\nreturn [{\n  json: {\n    url: $env.FISCALIZA_API_URL + '/integrations/whatsapp/delivery-callback',\n    body: requestBody,\n    timestamp,\n    signature\n  }\n}];"
+      }
+    },
+    {
+      "name": "Enviar callback",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1400, 0],
+      "parameters": {
+        "method": "POST",
+        "url": "={{$json.url}}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "x-fiscaliza-timestamp", "value": "={{$json.timestamp}}" },
+            {
+              "name": "x-fiscaliza-signature",
+              "value": "={{'sha256=' + $json.signature}}"
+            },
+            { "name": "x-request-id", "value": "={{$execution?.id}}" }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{$json.body}}",
+        "timeout": 10000
+      }
+    },
+    {
+      "name": "Responder 202",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [1680, 0],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{\"accepted\":true}}",
+        "options": {
+          "responseCode": 202
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Backend Webhook": {
+      "main": [[{ "node": "Validar assinatura e timestamp", "type": "main", "index": 0 }]]
+    },
+    "Validar assinatura e timestamp": {
+      "main": [[{ "node": "Montar mensagem UAZAPI", "type": "main", "index": 0 }]]
+    },
+    "Montar mensagem UAZAPI": {
+      "main": [[{ "node": "Enviar UAZAPI", "type": "main", "index": 0 }]]
+    },
+    "Enviar UAZAPI": {
+      "main": [[{ "node": "Callback de status", "type": "main", "index": 0 }]]
+    },
+    "Callback de status": {
+      "main": [[{ "node": "Enviar callback", "type": "main", "index": 0 }]]
+    },
+    "Enviar callback": {
+      "main": [[{ "node": "Responder 202", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": { "executionOrder": "v1" }
+}

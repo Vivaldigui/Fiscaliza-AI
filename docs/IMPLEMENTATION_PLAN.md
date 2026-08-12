@@ -91,14 +91,17 @@ Entregas pequenas, migráveis e testáveis. Nenhuma fase depende de mocks silenc
 
 **Critério atendido:** o vereador consulta apenas os documentos autorizados da proposição (anexos + respostas); um chunk mais similar de documento não autorizado nunca entra no resultado; pergunta sem fonte suficiente recebe resposta explícita de insuficiência.
 
-## Fase 5B — WhatsApp e notificações (pendente)
+## Fase 5B — WhatsApp e notificações (implementada)
 
-- inbound UAZAPI via n8n com idempotência e identidade E.164;
-- `ResponseAnalysisCompleted` → `Notification` → workflow n8n;
-- retries/status de entrega e alertas de prazo;
-- workflows e payloads de exemplo importáveis.
+**Status:** implementada e validada em 2026-08-12 com fixtures sintéticas e fakes explícitos de n8n/UAZAPI. Detalhes em `PHASE_5B_REPORT.md` e `NOTIFICATION_DELIVERY.md`.
 
-**Critério:** mensagem duplicada não duplica resposta; notificação só sai após análise.
+- inbound UAZAPI via n8n com idempotência `(instance, messageId)`, identidade E.164 e deny-by-default;
+- sessão Redis (`whatsapp:session:{instance}:{identityId}`), seleção de contexto em linguagem natural e resposta assíncrona reutilizando o `ConversationAnswerPipeline`/RAG da Fase 5A;
+- `ResponseAnalysisCompleted` (derivado, somente resposta `COMPLETED`) → `Notification` → workflow n8n;
+- retries/status de entrega com histórico append-only de tentativas, callbacks com validação de transições e alertas de prazo idempotentes;
+- workflows e payloads de exemplo importáveis; painel em `/whatsapp` e `/notificacoes`.
+
+**Critério:** mensagem duplicada não duplica resposta; notificação só sai após análise. Atendido e testado (ver `PHASE_5B_REPORT.md`).
 
 ## Fase 6 — Endurecimento e operação piloto
 
@@ -128,7 +131,7 @@ Entregas pequenas, migráveis e testáveis. Nenhuma fase depende de mocks silenc
 | Vazamento por RAG/URL               | incidente LGPD                      | escopo SQL, deny-by-default, URL curta e testes IDOR                          |
 | Mudança de modelo/provider          | regressão/custo                     | provider abstrato, prompt/schema versionados, golden tests e cache versionado |
 | Regra de prazo municipal específica | prazo incorreto                     | configuração/snapshot, suíte de calendário e aprovação jurídica               |
-| UAZAPI/n8n indisponível             | mensagens perdidas/duplicadas       | fila, outbox, idempotência, callbacks e reconciliação                         |
+| UAZAPI/n8n indisponível             | mensagens perdidas/duplicadas       | fila, outbox, idempotência, callbacks e reconciliação (Fase 5B)               |
 | pgvector com dimensão variável      | reindexação complexa                | provider de embedding separado e versão do índice                             |
 | Dados sensíveis em SaaS LLM         | risco contratual/LGPD               | minimização, aprovação do operador e opção futura on-premise                  |
 | Seed/bootstrap inseguro             | tomada de conta                     | senha obrigatória via segredo, troca e auditoria                              |

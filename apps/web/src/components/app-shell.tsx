@@ -20,6 +20,7 @@ const navigation = [
   { href: '/feriados', label: 'Feriados', icon: 'clock' },
   { href: '/vereadores', label: 'Vereadores', icon: 'users' },
   { href: '/whatsapp', label: 'WhatsApp', icon: 'message' },
+  { href: '/notificacoes', label: 'Notificações', icon: 'message' },
   { href: '/configuracoes', label: 'Configurações', icon: 'settings' },
   { href: '/auditoria', label: 'Auditoria', icon: 'audit' },
   { href: '/uso-ia', label: 'Uso da IA', icon: 'dashboard' },

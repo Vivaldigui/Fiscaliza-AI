@@ -16,6 +16,10 @@ import type { StructuredLogger } from '../logger';
 import { excerptExistsOnPage } from '../ai/evidence-validator';
 import { AuthorizedRetriever, type RetrievedPage } from './retrieval';
 import { resolveStructuredAnswer, type StructuredQueryData } from './structured-answers';
+import type { WhatsappContextResolver } from '../whatsapp/whatsapp-context-resolver';
+
+export const WHATSAPP_REPLY_TEMPLATE = 'whatsapp-conversation-reply.v1';
+export const WHATSAPP_REPLY_TEMPLATE_VERSION = 'phase5b-whatsapp-reply-v1';
 
 /**
  * Roles that may read any proposition, mirroring the API's
@@ -38,6 +42,8 @@ interface AnswerUsage {
 interface CompletionParams {
   messageId: string;
   conversationId: string;
+  channel: 'WEB' | 'WHATSAPP';
+  whatsappIdentityId: string | null;
   text: string;
   sources: ValidatedSource[];
   provider: string | null;
@@ -71,13 +77,17 @@ export class ConversationAnswerPipeline {
     embeddingsProvider: EmbeddingProvider,
     private readonly config: WorkerConfig,
     private readonly logger: StructuredLogger,
+    private readonly whatsappContext?: WhatsappContextResolver,
   ) {
     this.retriever = new AuthorizedRetriever(prisma, embeddingsProvider, config);
   }
 
   async process(messageId: string, jobId: string): Promise<void> {
-    if (!this.config.CHAT_ENABLED) {
-      await this.fail(messageId, 'Chat web desabilitado (CHAT_ENABLED=false).');
+    if (!this.config.CHAT_ENABLED && !this.config.WHATSAPP_ENABLED) {
+      await this.fail(
+        messageId,
+        'Conversas desabilitadas (CHAT_ENABLED e WHATSAPP_ENABLED false).',
+      );
       return;
     }
     try {
@@ -87,7 +97,16 @@ export class ConversationAnswerPipeline {
       // sempre quando os retries do BullMQ se esgotam.
       const message = await this.prisma.conversationMessage.findUnique({
         where: { id: messageId },
-        include: { conversation: { include: { proposition: true } } },
+        include: {
+          conversation: {
+            include: {
+              proposition: true,
+              whatsappIdentity: {
+                select: { id: true, instance: true, verifiedAt: true, active: true },
+              },
+            },
+          },
+        },
       });
       if (!message || message.role !== 'ASSISTANT') {
         this.logger.warn('Mensagem de resposta não encontrada ou papel inválido.', {
@@ -105,6 +124,61 @@ export class ConversationAnswerPipeline {
         });
         return;
       }
+      const channel = message.conversation.channel;
+
+      if (channel === 'WHATSAPP') {
+        if (!this.config.WHATSAPP_ENABLED) {
+          await this.fail(messageId, 'WhatsApp desabilitado (WHATSAPP_ENABLED=false).');
+          return;
+        }
+        if (!(await this.whatsappIdentityStillValid(message.conversation.whatsappIdentity))) {
+          await this.fail(
+            messageId,
+            'Identidade WhatsApp inativa, não verificada ou sem usuário vinculado.',
+          );
+          return;
+        }
+        const identity = message.conversation.whatsappIdentity!;
+        const resolution = await this.whatsappContext?.resolve({
+          conversationId: message.conversationId,
+          userId: message.conversation.userId,
+          propositionId: message.conversation.propositionId,
+          whatsappIdentityId: identity.id,
+          instance: identity.instance,
+          question: (await this.loadUserQuestion(message)) ?? '',
+        });
+        if (resolution && resolution.kind !== 'no-op') {
+          await this.complete({
+            messageId,
+            conversationId: message.conversationId,
+            channel,
+            whatsappIdentityId: message.conversation.whatsappIdentityId,
+            text: resolution.text ?? '',
+            sources: [],
+            provider: null,
+            model: null,
+            answerVersion: WEB_STRUCTURED_VERSION,
+            embeddingVersion: null,
+            usage: { answer: null, embedding: null },
+          });
+          return;
+        }
+        // O resolvedor pode ter reativado o contexto da sessão; recarrega a
+        // conversa para usar a proposição autorizada.
+        const refreshed = await this.prisma.conversation.findUnique({
+          where: { id: message.conversationId },
+          include: { proposition: true },
+        });
+        if (!refreshed) {
+          await this.fail(messageId, 'Conversa WhatsApp não encontrada no reprocessamento.');
+          return;
+        }
+        message.conversation = refreshed as typeof message.conversation;
+      } else if (!this.config.CHAT_ENABLED) {
+        await this.fail(messageId, 'Chat web desabilitado (CHAT_ENABLED=false).');
+        return;
+      }
+
       const userMessage = await this.prisma.conversationMessage.findFirst({
         where: {
           conversationId: message.conversationId,
@@ -135,6 +209,8 @@ export class ConversationAnswerPipeline {
           await this.complete({
             messageId,
             conversationId: message.conversationId,
+            channel,
+            whatsappIdentityId: message.conversation.whatsappIdentityId,
             text: resolved.text,
             sources: [],
             provider: null,
@@ -146,11 +222,63 @@ export class ConversationAnswerPipeline {
           return;
         }
       }
-      await this.answerWithRetrieval(messageId, message.conversationId, question, proposition);
+      await this.answerWithRetrieval(
+        messageId,
+        message.conversationId,
+        channel,
+        message.conversation.whatsappIdentityId,
+        question,
+        proposition,
+      );
     } catch (error) {
       await this.fail(messageId, this.describeError(error));
       throw error;
     }
+  }
+
+  private async loadUserQuestion(message: {
+    conversationId: string;
+    inputHash: string | null;
+  }): Promise<string | null> {
+    if (!message.inputHash) return null;
+    const userMessage = await this.prisma.conversationMessage.findFirst({
+      where: { conversationId: message.conversationId, role: 'USER', inputHash: message.inputHash },
+      orderBy: { createdAt: 'asc' },
+      select: { content: true },
+    });
+    return userMessage?.content ?? null;
+  }
+
+  /**
+   * Re-validates, at processing time, that the WhatsApp identity behind the
+   * conversation is still active, verified and backed by an ACTIVE user —
+   * otherwise the answer FAILS without any document search or LLM call.
+   */
+  private async whatsappIdentityStillValid(
+    whatsappIdentity: {
+      id: string;
+      active: boolean;
+      verifiedAt: Date | null;
+    } | null,
+  ): Promise<boolean> {
+    if (!whatsappIdentity || !whatsappIdentity.active || !whatsappIdentity.verifiedAt) {
+      return false;
+    }
+    const identity = await this.prisma.whatsappIdentity.findUnique({
+      where: { id: whatsappIdentity.id },
+      include: {
+        councilor: {
+          select: {
+            active: true,
+            userId: true,
+            user: { select: { status: true } },
+          },
+        },
+      },
+    });
+    if (!identity || !identity.councilor.active) return false;
+    if (!identity.councilor.userId || !identity.councilor.user) return false;
+    return identity.councilor.user.status === 'ACTIVE';
   }
 
   /**
@@ -230,6 +358,8 @@ export class ConversationAnswerPipeline {
   private async answerWithRetrieval(
     messageId: string,
     conversationId: string,
+    channel: 'WEB' | 'WHATSAPP',
+    whatsappIdentityId: string | null,
     question: string,
     proposition: { id: string } | null,
   ): Promise<void> {
@@ -237,6 +367,8 @@ export class ConversationAnswerPipeline {
       await this.complete({
         messageId,
         conversationId,
+        channel,
+        whatsappIdentityId,
         text: INSUFFICIENT_EVIDENCE_ANSWER,
         sources: [],
         provider: null,
@@ -253,6 +385,8 @@ export class ConversationAnswerPipeline {
       await this.complete({
         messageId,
         conversationId,
+        channel,
+        whatsappIdentityId,
         text: INSUFFICIENT_EVIDENCE_ANSWER,
         sources: [],
         provider: null,
@@ -271,6 +405,8 @@ export class ConversationAnswerPipeline {
       await this.complete({
         messageId,
         conversationId,
+        channel,
+        whatsappIdentityId,
         text: INSUFFICIENT_EVIDENCE_ANSWER,
         sources: [],
         provider: null,
@@ -290,6 +426,8 @@ export class ConversationAnswerPipeline {
     await this.complete({
       messageId,
       conversationId,
+      channel,
+      whatsappIdentityId,
       text,
       sources,
       provider: result.provider,
@@ -425,13 +563,61 @@ export class ConversationAnswerPipeline {
         where: { id: params.conversationId },
         data: { lastInteractionAt: new Date() },
       });
+      if (params.channel === 'WHATSAPP' && params.whatsappIdentityId) {
+        await this.createReplyNotification(transaction, params);
+      }
     });
     this.logger.info('Resposta de conversa concluída.', {
       messageId: params.messageId,
+      channel: params.channel,
       answerVersion: params.answerVersion,
       sourceCount: params.sources.length,
       providedBy: params.provider ?? 'structured',
       stage: 'conversation',
+    });
+  }
+
+  /**
+   * WhatsApp replies are delivered back through the same notification pipeline
+   * as other outbound messages: a `NotificationCreated` outbox event guarantees
+   * a recoverable delivery job, and the idempotency key (`whatsapp-reply:<messageId>`)
+   * prevents double delivery on reprocessing.
+   */
+  private async createReplyNotification(
+    transaction: Prisma.TransactionClient,
+    params: CompletionParams,
+  ): Promise<void> {
+    const idempotencyKey = `whatsapp-reply:${params.messageId}`;
+    const existing = await transaction.notification.findUnique({
+      where: { idempotencyKey },
+      select: { id: true },
+    });
+    if (existing) return;
+    const created = await transaction.notification.create({
+      data: {
+        type: 'WHATSAPP_CONVERSATION_REPLY',
+        channel: 'WHATSAPP',
+        identityId: params.whatsappIdentityId,
+        template: WHATSAPP_REPLY_TEMPLATE,
+        templateVersion: WHATSAPP_REPLY_TEMPLATE_VERSION,
+        payload: {
+          text: params.text,
+          conversationId: params.conversationId,
+          conversationMessageId: params.messageId,
+          answerVersion: params.answerVersion,
+        } as unknown as Prisma.InputJsonValue,
+        idempotencyKey,
+        status: 'PENDING',
+      },
+      select: { id: true },
+    });
+    await transaction.outboxEvent.create({
+      data: {
+        eventType: 'NotificationCreated',
+        aggregateType: 'Conversation',
+        aggregateId: params.conversationId,
+        payload: { notificationId: created.id } as unknown as Prisma.InputJsonValue,
+      },
     });
   }
 

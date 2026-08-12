@@ -135,6 +135,8 @@ As páginas de todas as respostas associadas à proposição (inicial + compleme
 
 Limiar de apresentação é carregado de `SystemSetting`. Valores seed/migration: normal `0.85` e aviso `0.60`; abaixo do limite inferior, o resultado corrente vira `NEEDS_HUMAN_REVIEW` (`AiAnalysisPipeline.finalizeItem` em `apps/worker/src/ai/ai-pipeline.ts`), preservando `originalStatus`/`originalExplanation` intactos. Esses números não pertencem ao código de domínio.
 
+Quando uma análise de resposta termina `COMPLETED` (`REQUEST_RESPONSE`/`INDICATION_RESPONSE`), o pipeline emite, além do `AnalysisCompleted` existente, o evento derivado `ResponseAnalysisCompleted` — contrato consumido pela Fase 5B para notificar autores. Extrações, `PENDING`/`PROCESSING`/`FAILED`/`NEEDS_HUMAN_REVIEW` nunca emitem esse evento derivado, e nenhum mérito é recalculado no n8n.
+
 ## 10. Validação de evidências
 
 Depois do LLM, um validador determinístico verifica (`apps/worker/src/ai/evidence-validator.ts` + `AiAnalysisPipeline.finalizeItem`):

@@ -60,25 +60,25 @@ As dependências apontam para dentro: `apps/*` pode depender de `packages/*`; `s
 
 ## 4. Componentes do backend
 
-| Módulo                             | Responsabilidade                                                                                          |
-| ---------------------------------- | --------------------------------------------------------------------------------------------------------- |
-| `AuthModule`                       | login, refresh token rotativo, revogação e identidade atual                                               |
-| `AuthorizationModule`              | RBAC e escopo por autoria/classificação                                                                   |
-| `UsersModule` / `CouncilorsModule` | usuários, papéis, mandatos e identidades WhatsApp                                                         |
-| `PropositionsModule`               | requerimentos/indicações, coautoria, documentos e timeline                                                |
-| `DocumentsModule`                  | upload, metadados, checksum, URLs assinadas e páginas                                                     |
-| `ResponsesModule`                  | respostas 1:N, complementações, retificações e documentos                                                 |
-| `AssociationsModule`               | candidatos determinísticos, decisão e revisão manual                                                      |
-| `AnalysesModule`                   | extração/análise estruturada, revisão humana append-only, evidências e resumo executivo (Fase 4)          |
-| `ConversationsModule`              | conversas web, mensagens, contexto opcional de proposição, sessão Redis e URL assinada de fonte (Fase 5A) |
-| `DeadlinesModule`                  | política/snapshot, prorrogações, suspensões e estados                                                     |
-| `HolidaysModule`                   | calendário administrativo por escopo                                                                      |
-| `WhatsappModule`                   | idempotência, sessão Redis, contexto e respostas                                                          |
-| `NotificationsModule`              | outbox, tentativas, entrega e falhas recuperáveis                                                         |
-| `SettingsModule`                   | configurações tipadas, versionadas e auditadas                                                            |
-| `AuditModule`                      | trilha append-only de ações relevantes                                                                    |
-| `HealthModule`                     | liveness/readiness de API, PostgreSQL, Redis e MinIO                                                      |
-| `JobsModule`                       | filas, retries, backoff, dead-letter e métricas                                                           |
+| Módulo                             | Responsabilidade                                                                                                        |
+| ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `AuthModule`                       | login, refresh token rotativo, revogação e identidade atual                                                             |
+| `AuthorizationModule`              | RBAC e escopo por autoria/classificação                                                                                 |
+| `UsersModule` / `CouncilorsModule` | usuários, papéis, mandatos e identidades WhatsApp                                                                       |
+| `PropositionsModule`               | requerimentos/indicações, coautoria, documentos e timeline                                                              |
+| `DocumentsModule`                  | upload, metadados, checksum, URLs assinadas e páginas                                                                   |
+| `ResponsesModule`                  | respostas 1:N, complementações, retificações e documentos                                                               |
+| `AssociationsModule`               | candidatos determinísticos, decisão e revisão manual                                                                    |
+| `AnalysesModule`                   | extração/análise estruturada, revisão humana append-only, evidências e resumo executivo (Fase 4)                        |
+| `ConversationsModule`              | conversas web e WhatsApp, mensagens, contexto opcional de proposição, sessão Redis e URL assinada de fonte (Fase 5A/5B) |
+| `DeadlinesModule`                  | política/snapshot, prorrogações, suspensões e estados                                                                   |
+| `HolidaysModule`                   | calendário administrativo por escopo                                                                                    |
+| `WhatsappModule`                   | inbound assinado e idempotente, identidade E.164, sessão Redis, callbacks de status e admin de identidades              |
+| `NotificationsModule`              | outbox, tentativas append-only, entrega, retry/cancel e falhas recuperáveis                                             |
+| `SettingsModule`                   | configurações tipadas, versionadas e auditadas                                                                          |
+| `AuditModule`                      | trilha append-only de ações relevantes                                                                                  |
+| `HealthModule`                     | liveness/readiness de API, PostgreSQL, Redis e MinIO                                                                    |
+| `JobsModule`                       | filas, retries, backoff, dead-letter e métricas                                                                         |
 
 Controllers só autenticam, validam, autorizam e delegam. Processamento de PDF, OCR, embeddings e LLM ocorre em jobs idempotentes.
 
@@ -180,7 +180,26 @@ A indexação e a consulta estão desacopladas do provider de chat:
 5. o worker valida as fontes citadas pelo modelo contra páginas realmente existentes; fonte inventada ou indisponível rebaixa a resposta para `INSUFFICIENT_EVIDENCE_ANSWER` (nunca persiste fonte falsa);
 6. a conta guarda `provider`, `model`, `answerVersion`, `embeddingVersion`, tokens e latência por mensagem; `AIUsage` registra as operações `web-answer` e `embedding`.
 
-O chat é web (`/conversas`), com sessão Redis temporária (`activePropositionId`/`conversationId`), contexto opcional de proposição e fontes clicáveis que abrem o PDF assinado na página exata. Nenhum caminho de WhatsApp ou n8n foi adicionado (Fase 5B).
+O chat é web (`/conversas`) e WhatsApp, com sessão Redis temporária (`activePropositionId`/`conversationId`), contexto opcional de proposição e fontes validadas. Na Fase 5B, o WhatsApp entrou de ponta a ponta: inbound assinado/idempotente, identidade E.164 com deny-by-default e resposta assíncrona reutilizando exatamente este pipeline (ver `docs/WHATSAPP_FLOW.md` e `docs/NOTIFICATION_DELIVERY.md`).
+
+## 5.4. Notificações e alertas (Fase 5B)
+
+```mermaid
+flowchart LR
+  IN["POST /integrations/whatsapp/inbound (HMAC)"] --> TX["transação: InboundMessage + idempotência"]
+  TX -->|"identidade inválida"| NEUTRO["Notification neutra (deny)"]
+  TX -->|"válida"| CONV["Conversation WHATSAPP + mensagem PENDING + outbox"]
+  CONV --> Q["conversation-answers"]
+  Q --> ANS["ConversationAnswerPipeline existente (RAG autorizado)"]
+  ANS --> NOTIF["Notification de resposta + outbox NotificationCreated"]
+  AI["ResponseAnalysisCompleted"] --> NF["notification-factory (idempotente)"]
+  DL["DeadlineApproaching/Expired"] --> NF
+  NOTIF --> DQ["notification-delivery"]
+  NF --> DQ
+  DQ --> N8N["n8n assinado → UAZAPI → callback"]
+  N8N --> CB["delivery-callback (transições validadas)"]
+  RC["notification-reconciliation"] --> DQ
+```
 
 ## 6. Eventos, filas e consistência
 
@@ -201,16 +220,20 @@ Filas BullMQ adicionadas na Fase 5A:
 - `embeddings`: job `embed` por documento/tentativa (`jobId` determinístico), indexação incremental e idempotente dos chunks pendentes da tentativa corrente, restrita a documentos com processamento `COMPLETED` e sem `NEEDS_REVIEW` (fail-closed). Backfill controlado em `apps/worker/scripts/backfill-embeddings.ts`.
 - `conversation-answers`: job `answer` por mensagem (`PENDING ASSISTANT`), consumindo o evento outbox `ConversationAnswerRequested`. Resolve intenção estruturada primeiro, depois RAG autorizado quando necessário; retries limitados no repair do JSON estruturado.
 
+Filas BullMQ adicionadas na Fase 5B:
+
+- `notification-delivery`: job `deliver` por `Notification` (`jobId` determinístico `notification:{id}`), consumindo `NotificationCreated`/`NotificationRetryRequested`. Claim concorrente no banco, tentativas limitadas com backoff, `NotificationDeliveryAttempt` append-only e entrega via `N8nWebhookDeliveryProvider` (assinado, timeout).
+- `notification-factory`: criação idempotente de notificações a partir de `ResponseAnalysisCompleted` (somente análises de resposta `COMPLETED`) e `DeadlineApproaching`/`DeadlineExpired` (com `deadlineId + eventType + dueDate` no jobId).
+- `notification-reconciliation`: varredura periódica que re-enfileira pendentes, reseta `PROCESSING` presos e finaliza notificações com tentativas esgotadas.
+
 Filas futuras planejadas:
 
 - `document-classification`: tipo e metadados;
-- `document-association`: candidatos e decisão;
-- `notifications`: chamadas n8n/UAZAPI;
-- `deadlines`: recálculo e alertas.
+- `document-association`: candidatos e decisão.
 
 Eventos de domínio são gravados em uma **transactional outbox** e publicados por worker. Cada consumidor registra idempotência por `eventId` ou chave de negócio. Jobs têm tentativas limitadas, backoff exponencial e estado consultável. Falha externa nunca remove o documento nem duplica mensagem.
 
-Eventos já produzidos: `DocumentUploaded`, `DocumentProcessed`, `PropositionCreated`, `ResponseCreated`, `ResponseAssociated`, `DeadlineCreated`, `DeadlineExtended`, `DeadlineApproaching`, `DeadlineExpired`, `AnalysisRequested`, `AnalysisCompleted`, `AnalysisNeedsReview`, `AnalysisFailed` e `ConversationAnswerRequested`. Na Fase 5A, `DocumentProcessed` também alimenta a fila `embeddings` (apenas quando `EMBEDDINGS_ENABLED` e a tentativa está `COMPLETED`), e `ConversationAnswerRequested` alimenta a fila `conversation-answers`. WhatsApp end-to-end, notificações externas e alertas de prazo continuam reservados para a Fase 5B; `AnalysisCompleted` é o ponto de extensão que a Fase 5B consumirá para RAG/chat/WhatsApp sem recriar a lógica de fiscalização.
+Eventos já produzidos: `DocumentUploaded`, `DocumentProcessed`, `PropositionCreated`, `ResponseCreated`, `ResponseAssociated`, `DeadlineCreated`, `DeadlineExtended`, `DeadlineApproaching`, `DeadlineExpired`, `AnalysisRequested`, `AnalysisCompleted`, `AnalysisNeedsReview`, `AnalysisFailed`, `ConversationAnswerRequested`, `ResponseAnalysisCompleted` (derivado, somente resposta `COMPLETED`), `NotificationCreated` e `NotificationRetryRequested`.
 
 ## 7. Autorização e escopo de dados
 
@@ -232,7 +255,7 @@ Na operação da Fase 3, `ADMIN`, `SECRETARIAT` e `AUDITOR` consultam a camada l
 - Paginação por cursor nos registros de alto volume; filtros e ordenação com allowlist.
 - Endpoints pesados retornam `202 Accepted` e um identificador de job.
 
-Grupos previstos: `auth`, `users`, `councilors`, `propositions`, `documents`, `responses`, `analyses`, `deadlines`, `notifications`, `integrations/whatsapp`, `settings`, `audit` e `health`.
+Grupos previstos: `auth`, `users`, `councilors`, `propositions`, `documents`, `responses`, `analyses`, `deadlines`, `notifications`, `integrations/whatsapp`, `settings`, `audit` e `health`. `notifications` e `integrations/whatsapp` estão implementados na Fase 5B.
 
 ## 9. Observabilidade
 
