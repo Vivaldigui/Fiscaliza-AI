@@ -23,6 +23,7 @@ import { HolidaysModule } from './holidays/holidays.module';
 import { PropositionsModule } from './propositions/propositions.module';
 import { ResponsesModule } from './responses/responses.module';
 import { AnalysesModule } from './analyses/analyses.module';
+import { ConversationsModule } from './conversations/conversations.module';
 
 @Module({
   imports: [
@@ -78,6 +79,7 @@ import { AnalysesModule } from './analyses/analyses.module';
     PropositionsModule,
     ResponsesModule,
     AnalysesModule,
+    ConversationsModule,
   ],
   providers: [
     { provide: APP_GUARD, useClass: ThrottlerGuard },

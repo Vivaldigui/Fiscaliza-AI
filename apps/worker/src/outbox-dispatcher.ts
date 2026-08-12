@@ -9,6 +9,18 @@ import {
 import { Queue } from 'bullmq';
 import type Redis from 'ioredis';
 import { AI_JOB, AI_QUEUE, aiJobId, type AiQueuePayload } from './ai/ai-queue';
+import {
+  EMBEDDINGS_JOB,
+  EMBEDDINGS_QUEUE,
+  embeddingsJobId,
+  type EmbeddingsQueuePayload,
+} from './embeddings/embeddings-queue';
+import {
+  CONVERSATION_JOB,
+  CONVERSATION_QUEUE,
+  conversationJobId,
+  type ConversationQueuePayload,
+} from './conversation/conversation-queue';
 import type { WorkerConfig } from './config';
 import type { StructuredLogger } from './logger';
 
@@ -22,6 +34,8 @@ interface ClaimedOutboxEvent {
 
 const DOCUMENT_EVENTS = new Set(['DocumentUploaded', 'DocumentReprocessRequested']);
 const AI_EVENTS = new Set(['AnalysisRequested']);
+const EMBEDDING_EVENTS = new Set(['DocumentProcessed']);
+const CONVERSATION_EVENTS = new Set(['ConversationAnswerRequested']);
 
 export class OutboxDispatcher {
   private timer?: NodeJS.Timeout;
@@ -31,6 +45,8 @@ export class OutboxDispatcher {
     private readonly prisma: PrismaClient,
     private readonly queue: Queue<DocumentQueuePayload>,
     private readonly aiQueue: Queue<AiQueuePayload>,
+    private readonly embeddingsQueue: Queue<EmbeddingsQueuePayload>,
+    private readonly conversationQueue: Queue<ConversationQueuePayload>,
     private readonly redis: Redis,
     private readonly config: WorkerConfig,
     private readonly logger: StructuredLogger,
@@ -106,6 +122,31 @@ export class OutboxDispatcher {
           removeOnComplete: { age: 86_400, count: 1_000 },
           removeOnFail: { age: 7 * 86_400, count: 1_000 },
         });
+      } else if (EMBEDDING_EVENTS.has(event.event_type)) {
+        // Indexação falha-fechada: só geramos trabalho quando habilitada, e só
+        // para tentativas concluídas. Com EMBEDDINGS_ENABLED=false o evento é
+        // consumido como no-op (estado válido) e não vaza para o stream.
+        const payload = parseEmbeddingPayload(event);
+        if (this.config.EMBEDDINGS_ENABLED && payload.status === 'COMPLETED') {
+          await this.embeddingsQueue.add(EMBEDDINGS_JOB, payload, {
+            jobId: embeddingsJobId(payload),
+            attempts: this.config.EMBEDDINGS_QUEUE_ATTEMPTS,
+            backoff: { type: 'exponential', delay: this.config.EMBEDDINGS_QUEUE_BACKOFF_MS },
+            removeOnComplete: { age: 86_400, count: 1_000 },
+            removeOnFail: { age: 7 * 86_400, count: 1_000 },
+          });
+        }
+      } else if (CONVERSATION_EVENTS.has(event.event_type)) {
+        const payload = parseConversationPayload(event);
+        if (this.config.CHAT_ENABLED) {
+          await this.conversationQueue.add(CONVERSATION_JOB, payload, {
+            jobId: conversationJobId(payload),
+            attempts: this.config.CONVERSATION_QUEUE_ATTEMPTS,
+            backoff: { type: 'exponential', delay: this.config.CONVERSATION_QUEUE_BACKOFF_MS },
+            removeOnComplete: { age: 86_400, count: 1_000 },
+            removeOnFail: { age: 7 * 86_400, count: 1_000 },
+          });
+        }
       } else {
         await this.redis.xadd(
           'fiscaliza:domain-events',
@@ -186,4 +227,43 @@ export function createDocumentQueue(redis: Redis): Queue<DocumentQueuePayload> {
 
 export function createAiQueue(redis: Redis): Queue<AiQueuePayload> {
   return new Queue<AiQueuePayload>(AI_QUEUE, { connection: redis });
+}
+
+export function createEmbeddingsQueue(redis: Redis): Queue<EmbeddingsQueuePayload> {
+  return new Queue<EmbeddingsQueuePayload>(EMBEDDINGS_QUEUE, { connection: redis });
+}
+
+export function createConversationQueue(redis: Redis): Queue<ConversationQueuePayload> {
+  return new Queue<ConversationQueuePayload>(CONVERSATION_QUEUE, { connection: redis });
+}
+
+function parseConversationPayload(event: ClaimedOutboxEvent): ConversationQueuePayload {
+  if (!event.payload || typeof event.payload !== 'object' || Array.isArray(event.payload)) {
+    throw new Error('Payload de resposta de conversa inválido no outbox.');
+  }
+  const payload = event.payload as Record<string, Prisma.JsonValue>;
+  if (typeof payload.conversationMessageId !== 'string') {
+    throw new Error('Campo conversationMessageId ausente no evento ConversationAnswerRequested.');
+  }
+  return { outboxEventId: event.id, conversationMessageId: payload.conversationMessageId };
+}
+
+function parseEmbeddingPayload(event: ClaimedOutboxEvent): EmbeddingsQueuePayload {
+  if (!event.payload || typeof event.payload !== 'object' || Array.isArray(event.payload)) {
+    throw new Error('Payload de indexação inválido no outbox.');
+  }
+  const payload = event.payload as Record<string, Prisma.JsonValue>;
+  if (
+    typeof payload.documentId !== 'string' ||
+    !Number.isInteger(payload.attempt) ||
+    typeof payload.status !== 'string'
+  ) {
+    throw new Error('Campos obrigatórios ausentes no evento DocumentProcessed.');
+  }
+  return {
+    outboxEventId: event.id,
+    documentId: payload.documentId,
+    attempt: payload.attempt as number,
+    status: payload.status,
+  };
 }

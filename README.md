@@ -1,6 +1,6 @@
 # Fiscaliza AI
 
-Aplicação interna, estruturada e auditável para acompanhar requerimentos, indicações, respostas, evidências e prazos de uma Câmara Municipal. Esta entrega implementa a **Fase 4 (IA estruturada, evidências e revisão humana)** sobre a camada legislativa determinística das Fases 1–3.
+Aplicação interna, estruturada e auditável para acompanhar requerimentos, indicações, respostas, evidências e prazos de uma Câmara Municipal. Esta entrega implementa as **Fases 4 (IA estruturada, evidências e revisão humana)** e **5A (RAG web autorizado com embeddings)** sobre a camada legislativa determinística das Fases 1–3.
 
 ## O que já está implementado
 
@@ -29,9 +29,13 @@ Aplicação interna, estruturada e auditável para acompanhar requerimentos, ind
 - `AI_PROCESSING_ENABLED=false` por padrão (fail closed): nenhuma chamada externa ocorre sem ativação operacional explícita;
 - fila `ai-processing` assíncrona, cache por `inputHash`, `AIUsage` e revisão humana append-only (`AnalysisRevision`);
 - tela de análise na proposição: itens, evidências, confiança, histórico e revisão manual;
-- contratos e exemplos inativos de workflows n8n.
+- contratos e exemplos inativos de workflows n8n;
+- abstração `EmbeddingProvider` (`createEmbeddingProvider`) independente do provider de chat, com `OpenAIEmbeddingProvider` e `FakeEmbeddingProvider` (dublê determinístico para dev/CI, rejeitado em produção);
+- indexação de embeddings incremental, idempotente e versionada (provider/modelo/versão/hash), restrita à tentativa de processamento corrente de cada documento — reprocessar nunca altera evidência histórica; backfill controlado e índice HNSW de pgvector;
+- retrieval autorizado: perguntas estruturadas resolvidas no PostgreSQL antes de qualquer RAG; o conjunto de documentos autorizados da proposição (anexos + respostas oficiais) é aplicado no SQL antes do vetor `ORDER BY`/`LIMIT` — nunca há "busca global e filtro em memória";
+- conversa web (`` `/conversas` ``) com fontes clicáveis (URL assinada do PDF na página exata), resposta explícita "sem evidência suficiente", persistência por mensagem de provider/modelo/tokens/latência/versões e sessão Redis temporária.
 
-Embeddings, RAG e WhatsApp end-to-end permanecem deliberadamente na Fase 5 de `docs/IMPLEMENTATION_PLAN.md`. A Fase 4 não implementa chat genérico com PDF, não cria embeddings e não afirma conclusão jurídica — apenas descreve fatos documentais rastreáveis a página e trecho.
+Embeddings, RAG autorizado e a conversa web foram implementados na **Fase 5A**; WhatsApp end-to-end, notificações externas e alertas de prazo permanecem na Fase 5B de `docs/IMPLEMENTATION_PLAN.md`. A IA não afirma conclusão jurídica — apenas descreve fatos documentais rastreáveis a página e trecho.
 
 ## Pré-requisitos
 
@@ -97,7 +101,7 @@ pnpm test
 pnpm build
 ```
 
-O CI também valida Prisma, todas as migrations em PostgreSQL limpo e os testes de integração das Fases 3 e 4. Todas as fixtures são sintéticas; nenhum teste depende de credencial real de LLM (`FakeLLMProvider`). A validação está registrada em `docs/PHASE_3_REPORT.md` e `docs/PHASE_4_REPORT.md`.
+O CI também valida Prisma, todas as migrations em PostgreSQL limpo e os testes de integração das Fases 3, 4 e 5A (estes últimos contra PostgreSQL/pgvector real). Todas as fixtures são sintéticas; nenhum teste depende de credencial real de LLM ou de embeddings (`FakeLLMProvider`/`FakeEmbeddingProvider`), e nenhum documento real é usado como fixture. A validação está registrada em `docs/PHASE_3_REPORT.md`, `docs/PHASE_4_REPORT.md` e `docs/PHASE_5A_REPORT.md`.
 
 ## Bootstrap e seed
 
@@ -125,7 +129,9 @@ Configurações seed (todas editáveis e auditáveis): políticas de prazo por `
 - `docs/DEADLINE_POLICY.md`
 - `docs/ASSOCIATION_ENGINE.md`
 - `docs/adr/ADR-001-DOCUMENT-PROCESSING-VERSIONING.md`
+- `docs/adr/ADR-002-EMBEDDINGS.md`
 - `docs/PHASE_3_REPORT.md`
 - `docs/PHASE_4_REPORT.md`
+- `docs/PHASE_5A_REPORT.md`
 
 Antes de produção, trate como bloqueadores o checklist de segurança, a política LGPD, a regra administrativa exata de contagem, o antivírus/quarentena, o contrato real da UAZAPI, os testes de restauração e a aprovação institucional para envio de documentos reais a um provider de IA externo.

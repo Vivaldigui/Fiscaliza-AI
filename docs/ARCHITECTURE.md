@@ -47,7 +47,7 @@ apps/
 packages/
   database/                  # Prisma schema, migrations, seed e PrismaClient
   shared/                    # contratos, enums, utilitários e schemas sem dependência de framework
-  ai/                        # LLMProvider, providers, prompts, schemas, retry e cache
+  ai/                        # LLMProvider, EmbeddingProvider, providers, prompts, schemas, retry e cache
   document-processing/       # checksum, PDF, OCR, páginas, chunks e associação
 infra/
   docker/                    # Dockerfiles e scripts de inicialização
@@ -60,24 +60,25 @@ As dependências apontam para dentro: `apps/*` pode depender de `packages/*`; `s
 
 ## 4. Componentes do backend
 
-| Módulo                             | Responsabilidade                                                                                 |
-| ---------------------------------- | ------------------------------------------------------------------------------------------------ |
-| `AuthModule`                       | login, refresh token rotativo, revogação e identidade atual                                      |
-| `AuthorizationModule`              | RBAC e escopo por autoria/classificação                                                          |
-| `UsersModule` / `CouncilorsModule` | usuários, papéis, mandatos e identidades WhatsApp                                                |
-| `PropositionsModule`               | requerimentos/indicações, coautoria, documentos e timeline                                       |
-| `DocumentsModule`                  | upload, metadados, checksum, URLs assinadas e páginas                                            |
-| `ResponsesModule`                  | respostas 1:N, complementações, retificações e documentos                                        |
-| `AssociationsModule`               | candidatos determinísticos, decisão e revisão manual                                             |
-| `AnalysesModule`                   | extração/análise estruturada, revisão humana append-only, evidências e resumo executivo (Fase 4) |
-| `DeadlinesModule`                  | política/snapshot, prorrogações, suspensões e estados                                            |
-| `HolidaysModule`                   | calendário administrativo por escopo                                                             |
-| `WhatsappModule`                   | idempotência, sessão Redis, contexto e respostas                                                 |
-| `NotificationsModule`              | outbox, tentativas, entrega e falhas recuperáveis                                                |
-| `SettingsModule`                   | configurações tipadas, versionadas e auditadas                                                   |
-| `AuditModule`                      | trilha append-only de ações relevantes                                                           |
-| `HealthModule`                     | liveness/readiness de API, PostgreSQL, Redis e MinIO                                             |
-| `JobsModule`                       | filas, retries, backoff, dead-letter e métricas                                                  |
+| Módulo                             | Responsabilidade                                                                                          |
+| ---------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| `AuthModule`                       | login, refresh token rotativo, revogação e identidade atual                                               |
+| `AuthorizationModule`              | RBAC e escopo por autoria/classificação                                                                   |
+| `UsersModule` / `CouncilorsModule` | usuários, papéis, mandatos e identidades WhatsApp                                                         |
+| `PropositionsModule`               | requerimentos/indicações, coautoria, documentos e timeline                                                |
+| `DocumentsModule`                  | upload, metadados, checksum, URLs assinadas e páginas                                                     |
+| `ResponsesModule`                  | respostas 1:N, complementações, retificações e documentos                                                 |
+| `AssociationsModule`               | candidatos determinísticos, decisão e revisão manual                                                      |
+| `AnalysesModule`                   | extração/análise estruturada, revisão humana append-only, evidências e resumo executivo (Fase 4)          |
+| `ConversationsModule`              | conversas web, mensagens, contexto opcional de proposição, sessão Redis e URL assinada de fonte (Fase 5A) |
+| `DeadlinesModule`                  | política/snapshot, prorrogações, suspensões e estados                                                     |
+| `HolidaysModule`                   | calendário administrativo por escopo                                                                      |
+| `WhatsappModule`                   | idempotência, sessão Redis, contexto e respostas                                                          |
+| `NotificationsModule`              | outbox, tentativas, entrega e falhas recuperáveis                                                         |
+| `SettingsModule`                   | configurações tipadas, versionadas e auditadas                                                            |
+| `AuditModule`                      | trilha append-only de ações relevantes                                                                    |
+| `HealthModule`                     | liveness/readiness de API, PostgreSQL, Redis e MinIO                                                      |
+| `JobsModule`                       | filas, retries, backoff, dead-letter e métricas                                                           |
 
 Controllers só autenticam, validam, autorizam e delegam. Processamento de PDF, OCR, embeddings e LLM ocorre em jobs idempotentes.
 
@@ -155,6 +156,32 @@ flowchart LR
 
 A IA nunca é a fonte da verdade: ela produz interpretação estruturada sobre `Proposition`/`Response`/`DocumentPage` já persistidos. `AI_PROCESSING_ENABLED=false` (padrão) faz a criação de análise falhar de forma explícita e recuperável, sem chamada externa. Ver `docs/ANALYSIS_PIPELINE.md` e `docs/AI_EVIDENCE_VALIDATION.md`.
 
+## 5.3. Retrieval autorizado e conversa web (Fase 5A)
+
+```mermaid
+flowchart LR
+  WEB["POST /conversations/:id/messages"] --> MSG["ConversationMessage USER + ASSISTANT PENDING + outbox"]
+  MSG --> Q2["fila conversation-answers"]
+  Q2 --> STR["Resolução estruturada no PostgreSQL (status/prazo/autoria)"]
+  STR -->|"sem template"| RAG["Retrieval autorizado (escopo SQL)"]
+  STR -->|"resposta determinística"| ANS
+  RAG -->|"vector ORDER BY + LIMIT só no escopo"| CTX["Bloco de contexto"]
+  CTX --> LLM2["generateStructured + fontes"]
+  LLM2 --> VAL["Validação de fontes (página existente)"]
+  VAL --> ANS["ConversationMessage COMPLETED / INSUFFICIENT_EVIDENCE"]
+```
+
+A indexação e a consulta estão desacopladas do provider de chat:
+
+1. `EmbeddingProvider` (`createEmbeddingProvider`) com `EMBEDDINGS_*` próprias; `DocumentProcessed` (`COMPLETED`) entra na fila `embeddings` somente quando `EMBEDDINGS_ENABLED=true` (fail-closed);
+2. o indexador grava vetor + `embedding_provider`/`embedding_model`/`embedding_version`/`embedding_hash` por chunk, pula os que já correspondem à configuração corrente e se restringe à tentativa corrente — idempotente e crash-safe, sem nunca reescrever o histórico;
+3. a consulta resolve a intenção estruturada antes de qualquer LLM; para perguntas abertas, o `AuthorizedRetriever` (worker) calcula o allowlist de documentos (anexos + respostas da proposição) e aplica `d.id IN (...::uuid)` **no SQL** antes de `ORDER BY c.embedding <=> $1 LIMIT $2` — nunca "busca global e filtra em memória";
+4. apenas a página mais similar de cada documento entra no contexto (`DISTINCT ON (page_id)`), na tentativa corrente e na versão corrente de embeddings;
+5. o worker valida as fontes citadas pelo modelo contra páginas realmente existentes; fonte inventada ou indisponível rebaixa a resposta para `INSUFFICIENT_EVIDENCE_ANSWER` (nunca persiste fonte falsa);
+6. a conta guarda `provider`, `model`, `answerVersion`, `embeddingVersion`, tokens e latência por mensagem; `AIUsage` registra as operações `web-answer` e `embedding`.
+
+O chat é web (`/conversas`), com sessão Redis temporária (`activePropositionId`/`conversationId`), contexto opcional de proposição e fontes clicáveis que abrem o PDF assinado na página exata. Nenhum caminho de WhatsApp ou n8n foi adicionado (Fase 5B).
+
 ## 6. Eventos, filas e consistência
 
 Fila BullMQ implementada:
@@ -169,17 +196,21 @@ Fila BullMQ adicionada na Fase 4:
 
 - `ai-processing`: job único `analyze`, `jobId` determinístico `analysis:{analysisId}:input:{inputHash}`, consumindo o evento outbox `AnalysisRequested`. Executa extração (quando ainda não houver `RequestedItem` ativo), análise cumulativa de respostas e resumo executivo. Ver `docs/ANALYSIS_PIPELINE.md`.
 
+Filas BullMQ adicionadas na Fase 5A:
+
+- `embeddings`: job `embed` por documento/tentativa (`jobId` determinístico), indexação incremental e idempotente dos chunks pendentes da tentativa corrente, restrita a documentos com processamento `COMPLETED` e sem `NEEDS_REVIEW` (fail-closed). Backfill controlado em `apps/worker/scripts/backfill-embeddings.ts`.
+- `conversation-answers`: job `answer` por mensagem (`PENDING ASSISTANT`), consumindo o evento outbox `ConversationAnswerRequested`. Resolve intenção estruturada primeiro, depois RAG autorizado quando necessário; retries limitados no repair do JSON estruturado.
+
 Filas futuras planejadas:
 
 - `document-classification`: tipo e metadados;
 - `document-association`: candidatos e decisão;
-- `embeddings`: chunks e vetores;
 - `notifications`: chamadas n8n/UAZAPI;
 - `deadlines`: recálculo e alertas.
 
 Eventos de domínio são gravados em uma **transactional outbox** e publicados por worker. Cada consumidor registra idempotência por `eventId` ou chave de negócio. Jobs têm tentativas limitadas, backoff exponencial e estado consultável. Falha externa nunca remove o documento nem duplica mensagem.
 
-Eventos já produzidos: `DocumentUploaded`, `DocumentProcessed`, `PropositionCreated`, `ResponseCreated`, `ResponseAssociated`, `DeadlineCreated`, `DeadlineExtended`, `DeadlineApproaching`, `DeadlineExpired`, `AnalysisRequested`, `AnalysisCompleted`, `AnalysisNeedsReview` e `AnalysisFailed`. WhatsApp e notificações externas continuam reservados para a Fase 5; `AnalysisCompleted` é o ponto de extensão que a Fase 5 consumirá para RAG/chat/WhatsApp sem recriar a lógica de fiscalização.
+Eventos já produzidos: `DocumentUploaded`, `DocumentProcessed`, `PropositionCreated`, `ResponseCreated`, `ResponseAssociated`, `DeadlineCreated`, `DeadlineExtended`, `DeadlineApproaching`, `DeadlineExpired`, `AnalysisRequested`, `AnalysisCompleted`, `AnalysisNeedsReview`, `AnalysisFailed` e `ConversationAnswerRequested`. Na Fase 5A, `DocumentProcessed` também alimenta a fila `embeddings` (apenas quando `EMBEDDINGS_ENABLED` e a tentativa está `COMPLETED`), e `ConversationAnswerRequested` alimenta a fila `conversation-answers`. WhatsApp end-to-end, notificações externas e alertas de prazo continuam reservados para a Fase 5B; `AnalysisCompleted` é o ponto de extensão que a Fase 5B consumirá para RAG/chat/WhatsApp sem recriar a lógica de fiscalização.
 
 ## 7. Autorização e escopo de dados
 
@@ -216,25 +247,27 @@ PostgreSQL é a fonte de verdade. MinIO requer versionamento/backup; Redis é re
 
 ## 11. Decisões registradas
 
-| Decisão           | Escolha inicial                                              | Motivo                                                      |
-| ----------------- | ------------------------------------------------------------ | ----------------------------------------------------------- |
-| Monorepo          | pnpm workspaces + Turborepo                                  | cache, contratos compartilhados e execução uniforme         |
-| API               | NestJS REST                                                  | módulos explícitos, DI e Swagger                            |
-| Banco             | PostgreSQL 16 + pgvector                                     | transações e busca semântica no mesmo escopo de autorização |
-| ORM               | Prisma                                                       | schema central, migrations e client tipado                  |
-| Arquivos          | MinIO/S3                                                     | objetos fora do banco e URLs assinadas                      |
-| Fila/sessão       | Redis + BullMQ                                               | jobs recuperáveis e sessão curta do WhatsApp                |
-| Worker documental | aplicação Node separada da API                               | parsing/OCR não bloqueiam nem ampliam o processo HTTP       |
-| PDF/OCR           | PDF.js em subprocesso + Poppler/Tesseract por página         | limite de memória/tempo e OCR somente quando necessário     |
-| Antivírus         | interface `DocumentSecurityScanner` + ClamAV INSTREAM        | quarentena explícita e implementação substituível           |
-| Auth              | access JWT curto + refresh opaco rotativo em cookie HttpOnly | revogação e menor exposição no navegador                    |
-| Auditoria/eventos | audit append-only + transactional outbox                     | rastreabilidade e entrega confiável                         |
-| Associação        | sinais determinísticos + threshold e margem configuráveis    | decisão explicável e ambiguidade sempre revisável           |
-| Prazo             | política por tipo + snapshot por registro                    | mudança administrativa não altera histórico                 |
-| Concorrência      | constraints + versão otimista em resposta/prazo              | evita dupla associação/prorrogação                          |
-| Derivados PDF     | versionados por `DocumentProcessingAttempt`                  | evidência histórica nunca aponta página substituída         |
-| IA                | interface `LLMProvider`; Anthropic e OpenAI                  | troca de provider/modelo sem regra no SDK                   |
-| Datas             | `timestamptz` em UTC + timezone IANA configurado             | cálculo local correto e persistência inequívoca             |
+| Decisão           | Escolha inicial                                                                       | Motivo                                                                     |
+| ----------------- | ------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| Monorepo          | pnpm workspaces + Turborepo                                                           | cache, contratos compartilhados e execução uniforme                        |
+| API               | NestJS REST                                                                           | módulos explícitos, DI e Swagger                                           |
+| Banco             | PostgreSQL 16 + pgvector                                                              | transações e busca semântica no mesmo escopo de autorização                |
+| ORM               | Prisma                                                                                | schema central, migrations e client tipado                                 |
+| Arquivos          | MinIO/S3                                                                              | objetos fora do banco e URLs assinadas                                     |
+| Fila/sessão       | Redis + BullMQ                                                                        | jobs recuperáveis e sessão curta do WhatsApp                               |
+| Worker documental | aplicação Node separada da API                                                        | parsing/OCR não bloqueiam nem ampliam o processo HTTP                      |
+| PDF/OCR           | PDF.js em subprocesso + Poppler/Tesseract por página                                  | limite de memória/tempo e OCR somente quando necessário                    |
+| Antivírus         | interface `DocumentSecurityScanner` + ClamAV INSTREAM                                 | quarentena explícita e implementação substituível                          |
+| Auth              | access JWT curto + refresh opaco rotativo em cookie HttpOnly                          | revogação e menor exposição no navegador                                   |
+| Auditoria/eventos | audit append-only + transactional outbox                                              | rastreabilidade e entrega confiável                                        |
+| Associação        | sinais determinísticos + threshold e margem configuráveis                             | decisão explicável e ambiguidade sempre revisável                          |
+| Prazo             | política por tipo + snapshot por registro                                             | mudança administrativa não altera histórico                                |
+| Concorrência      | constraints + versão otimista em resposta/prazo                                       | evita dupla associação/prorrogação                                         |
+| Derivados PDF     | versionados por `DocumentProcessingAttempt`                                           | evidência histórica nunca aponta página substituída                        |
+| IA                | interface `LLMProvider`; Anthropic e OpenAI                                           | troca de provider/modelo sem regra no SDK                                  |
+| Embeddings        | interface `EmbeddingProvider`; OpenAI + `fake`; provider/modelo/versão/hash por chunk | busca semântica versionada e incremental, independente do provider de chat |
+| RAG/chat          | escopo SQL (allowlist da proposição) antes do ranking; web                            | nenhum chunk fora do que o usuário pode ver entra no contexto              |
+| Datas             | `timestamptz` em UTC + timezone IANA configurado                                      | cálculo local correto e persistência inequívoca                            |
 
 ## 12. Árvore proposta
 

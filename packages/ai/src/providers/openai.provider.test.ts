@@ -12,6 +12,22 @@ import { OpenAIProvider } from './openai.provider';
 
 const testSchema = z.object({ resultado: z.string() });
 
+/**
+ * Asserts token mapping exactly while treating `latencyMs` as
+ * environment-dependent: `Math.round(performance.now() - startedAt)` can be
+ * 0 or 1 for an instant mocked completion depending on machine load.
+ */
+function assertUsage(
+  actual: { inputTokens: number | null; outputTokens: number | null; latencyMs: number },
+  expectedTokens: { inputTokens: number | null; outputTokens: number | null },
+): void {
+  assert.deepEqual(
+    { inputTokens: actual.inputTokens, outputTokens: actual.outputTokens },
+    expectedTokens,
+  );
+  assert.ok(Number.isInteger(actual.latencyMs) && actual.latencyMs >= 0);
+}
+
 function buildRequest(
   overrides: Partial<StructuredGenerationRequest<typeof testSchema>> = {},
 ): StructuredGenerationRequest<typeof testSchema> {
@@ -48,7 +64,7 @@ void describe('OpenAIProvider', () => {
     assert.deepEqual(result.data, { resultado: 'ok' });
     assert.equal(result.provider, 'openai');
     assert.equal(result.model, 'gpt-4o');
-    assert.deepEqual(result.usage, { inputTokens: 42, outputTokens: 7, latencyMs: 0 });
+    assertUsage(result.usage, { inputTokens: 42, outputTokens: 7 });
   });
 
   void it('aceita JSON dentro de code fence', async () => {
@@ -105,7 +121,7 @@ void describe('OpenAIProvider', () => {
     } as unknown as OpenAI;
     const provider = new OpenAIProvider({ apiKey: 'sk-test', model: 'gpt-4o', client });
     const result = await provider.generateStructured(buildRequest());
-    assert.deepEqual(result.usage, { inputTokens: null, outputTokens: null, latencyMs: 0 });
+    assertUsage(result.usage, { inputTokens: null, outputTokens: null });
   });
 
   void it('devolve o texto e o usage sem passar pelo schema', async () => {
@@ -120,7 +136,7 @@ void describe('OpenAIProvider', () => {
     })) as LLMTextResult;
     assert.equal(result.text, 'resposta em linguagem natural');
     assert.equal(result.provider, 'openai');
-    assert.deepEqual(result.usage, { inputTokens: 42, outputTokens: 7, latencyMs: 0 });
+    assertUsage(result.usage, { inputTokens: 42, outputTokens: 7 });
   });
 
   void it('recusa apiKey ou model ausentes no constructor', () => {

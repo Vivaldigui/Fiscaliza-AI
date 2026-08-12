@@ -12,6 +12,7 @@ const navigation = [
   { href: '/proposicoes', label: 'Proposições', icon: 'file' },
   { href: '/requerimentos', label: 'Requerimentos', icon: 'file' },
   { href: '/indicacoes', label: 'Indicações', icon: 'file' },
+  { href: '/conversas', label: 'Conversas', icon: 'message' },
   { href: '/respostas', label: 'Respostas', icon: 'response' },
   { href: '/associacoes', label: 'Pendências de associação', icon: 'review' },
   { href: '/revisoes', label: 'Revisões da IA', icon: 'review' },

@@ -100,7 +100,7 @@ Histórico por `(documentId, attempt)`: gatilho (`UPLOAD`, `INBOX` ou `REPROCESS
 
 ### `DocumentChunk`
 
-Trecho derivado de uma única página/tentativa, com página, sequência, conteúdo e SHA-256. Na Fase 3, `embedding` permanece `NULL`. A coluna física existente é `vector(1536)`; provider, dimensão, coluna/índice versionado e estratégia de reindexação precisam de ADR antes da Fase 5.
+Trecho derivado de uma única página/tentativa, com página, sequência, conteúdo e SHA-256. Na Fase 3, `embedding` permaneceu `NULL`. Na Fase 5A (ver `ADR-002-EMBEDDINGS.md`) o chunk é indexado com `embedding` (coluna física `vector(1536)`, sem suporte direto do Prisma — escrita/leitura por SQL bruto), `embeddingProvider`, `embeddingModel`, `embeddingVersion` e `embeddingHash`. A indexação é incremental e idempotente: o worker pula chunks já indexados com o hash/provider/modelo/versão correntes e só escreve os pendentes da tentativa corrente; a consulta filtra por `embedding_version` e pela tentativa corrente, então reprocessar nunca corrompe evidência histórica. O índice HNSW `document_chunks_embedding_hnsw_idx` (`vector_cosine_ops`) é criado na migration `202608110100_phase5a_embeddings`.
 
 ### Vínculos de documento
 
@@ -146,7 +146,7 @@ Registro append-only de cada mudança humana, com valor anterior, novo, ator, ju
 
 ### `AIUsage`
 
-Provider, modelo, operação, tokens de entrada/saída, latência, custo estimado, moeda, promptVersion, analysisVersion, inputHash e timestamps. Não armazena chain-of-thought.
+Provider, modelo, operação (por exemplo `analysis`, `extraction`, `web-answer`, `embedding`), tokens de entrada/saída, latência, custo estimado, moeda, promptVersion, analysisVersion, inputHash e timestamps. Desde a Fase 5A pode apontar para a `ConversationMessage` que gerou o uso (`conversationMessageId`). Não armazena chain-of-thought.
 
 ## 7. Prazos
 
@@ -172,9 +172,9 @@ Evento histórico com início, fim, motivo, quem suspendeu/retomou e vencimento 
 
 ### `Conversation` e `ConversationMessage`
 
-Conversa web/WhatsApp associada ao usuário e opcionalmente a uma proposição. Mensagens guardam papel, texto destinado ao usuário, fontes estruturadas e ID externo. Não guardam raciocínio interno do modelo.
+Conversa web (Fase 5A), associada ao usuário e opcionalmente a uma proposição. A `Conversation` guarda canal (`WEB`), título opcional e `lastInteractionAt`; a mensagem guarda papel (`USER`/`ASSISTANT`), texto destinado ao usuário, `sources` JSON (somente páginas validadas pelo worker: `documentId`, `documentPageId`, `pageNumber`), `status`, `provider`, `model`, `answerVersion`, `embeddingVersion`, tokens de entrada/saída, latência, `failureReason` e `inputHash` — a unicidade `(conversationId, role, inputHash)` impede duplicação idempotente da mesma pergunta. Não guardam raciocínio interno do modelo.
 
-Sessão curta (`activePropositionId`, `conversationId`, `lastInteraction`) fica no Redis; a conversa durável fica no PostgreSQL.
+Sessão curta (`activePropositionId`, `conversationId`, `lastInteraction`) fica no Redis; a conversa durável fica no PostgreSQL. `AIUsage` pode apontar para a mensagem geradora via `conversationMessageId`. O inbound WhatsApp (`InboundMessage`) permanece na Fase 5B.
 
 ### `InboundMessage`
 
@@ -225,7 +225,7 @@ Outbox transacional para publicação confiável; consumidor registra evento pro
 - unique em `InboundMessage(instance, messageId)`;
 - unique em `Analysis.inputHash` por operação/versão quando reutilizável;
 - índices em estados de processamento, prazos atuais, autoria, protocolo e timestamps;
-- índice HNSW/IVFFlat de pgvector criado após volume e métrica definidos;
+- índice HNSW de pgvector (`document_chunks_embedding_hnsw_idx`, `vector_cosine_ops`) criado na Fase 5A; IVFFlat permanece alternativa futura para volume;
 - `pageNumber >= 1`, confiança entre 0 e 1 e dias não negativos via validação e constraints SQL;
 - associação manual exige ator; revisão exige justificativa; evidência deve pertencer a página existente.
 
@@ -237,4 +237,4 @@ Outbox transacional para publicação confiável; consumidor registra evento pro
 
 - A unicidade atual de proposição continua `(type, number, year)`. A Câmara deve decidir antes de fontes multiunidade se origem/unidade/legislatura também integram a identidade; a Fase 3 não inventou esse dado institucional.
 - O conceito ambíguo `ResponseExtension` foi isolado como legado. Novos pedidos usam `DeadlineExtensionRequest`; somente `DeadlineExtension` altera efetivamente o prazo.
-- A dimensão fixa de `DocumentChunk.embedding` não define provider. Embeddings não são calculados nesta fase e exigem decisão versionada na Fase 5.
+- Provider, dimensão e versão de embeddings agora são configurados e versionados por chunk (`ADR-002-EMBEDDINGS.md`). Permanece adiado o que exigir decisão institucional: mascaramento de PII em chunks/contexto, metadata filtering e quantos pontos semânticos por proposição serão expostos.

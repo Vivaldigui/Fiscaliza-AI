@@ -257,6 +257,12 @@ enum MessageRole {
   SYSTEM_EVENT
 }
 
+enum ConversationMessageStatus {
+  PENDING
+  COMPLETED
+  FAILED
+}
+
 enum InboundMessageStatus {
   RECEIVED
   PROCESSING
@@ -590,6 +596,10 @@ model DocumentChunk {
   content             String                       @db.Text
   contentHash         String                       @map("content_hash") @db.Char(64)
   embedding           Unsupported("vector(1536)")?
+  embeddingProvider   String?                      @map("embedding_provider") @db.VarChar(50)
+  embeddingModel      String?                      @map("embedding_model") @db.VarChar(100)
+  embeddingVersion    String?                      @map("embedding_version") @db.VarChar(64)
+  embeddingHash       String?                      @map("embedding_hash") @db.Char(64)
   createdAt           DateTime                     @default(now()) @map("created_at") @db.Timestamptz(3)
   document            Document                     @relation(fields: [documentId], references: [id], onDelete: Cascade)
   processingAttempt   DocumentProcessingAttempt    @relation(fields: [processingAttemptId], references: [id], onDelete: Restrict)
@@ -598,6 +608,7 @@ model DocumentChunk {
   @@unique([processingAttemptId, pageNumber, sequence])
   @@index([documentId, pageNumber])
   @@index([documentId, processingAttemptId, pageNumber])
+  @@index([embedding], map: "document_chunks_embedding_hnsw_idx")
   @@map("document_chunks")
 }
 
@@ -851,9 +862,10 @@ model AnalysisRevision {
 }
 
 model AIUsage {
-  id              String    @id @default(uuid()) @db.Uuid
-  analysisId      String?   @map("analysis_id") @db.Uuid
-  provider        String    @db.VarChar(100)
+  id                    String                      @id @default(uuid()) @db.Uuid
+  analysisId            String?                     @map("analysis_id") @db.Uuid
+  conversationMessageId String?                     @map("conversation_message_id") @db.Uuid
+  provider              String                      @db.VarChar(100)
   model           String    @db.VarChar(200)
   operation       String    @db.VarChar(100)
   promptVersion   String    @map("prompt_version") @db.VarChar(100)
@@ -865,10 +877,12 @@ model AIUsage {
   estimatedCost   Decimal?  @map("estimated_cost") @db.Decimal(14, 6)
   currency        String?   @db.Char(3)
   cached          Boolean   @default(false)
-  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
-  analysis        Analysis? @relation(fields: [analysisId], references: [id], onDelete: SetNull)
+  createdAt       DateTime            @default(now()) @map("created_at") @db.Timestamptz(3)
+  analysis        Analysis?           @relation(fields: [analysisId], references: [id], onDelete: SetNull)
+  conversationMessage ConversationMessage? @relation(fields: [conversationMessageId], references: [id], onDelete: SetNull)
 
   @@index([analysisId])
+  @@index([conversationMessageId])
   @@index([provider, model, createdAt])
   @@index([inputHash])
   @@map("ai_usage")
@@ -997,15 +1011,27 @@ model Conversation {
 }
 
 model ConversationMessage {
-  id             String       @id @default(uuid()) @db.Uuid
-  conversationId String       @map("conversation_id") @db.Uuid
-  role           MessageRole
-  content        String       @db.Text
-  sources        Json?
-  externalId     String?      @map("external_id") @db.VarChar(255)
-  createdAt      DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
-  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  id                String                    @id @default(uuid()) @db.Uuid
+  conversationId    String                    @map("conversation_id") @db.Uuid
+  role              MessageRole
+  content           String                    @db.Text
+  sources           Json?
+  status            ConversationMessageStatus? @map("status")
+  provider          String?                   @db.VarChar(100)
+  model             String?                   @db.VarChar(200)
+  answerVersion     String?                   @map("answer_version") @db.VarChar(64)
+  embeddingVersion  String?                   @map("embedding_version") @db.VarChar(64)
+  inputTokens       Int?                      @map("input_tokens")
+  outputTokens      Int?                      @map("output_tokens")
+  latencyMs         Int?                      @map("latency_ms")
+  failureReason     String?                   @map("failure_reason") @db.Text
+  inputHash         String?                   @map("input_hash") @db.Char(64)
+  externalId        String?                   @map("external_id") @db.VarChar(255)
+  createdAt         DateTime                  @default(now()) @map("created_at") @db.Timestamptz(3)
+  conversation      Conversation              @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  aiUsages          AIUsage[]
 
+  @@unique([conversationId, role, inputHash])
   @@index([conversationId, createdAt])
   @@index([externalId])
   @@map("conversation_messages")

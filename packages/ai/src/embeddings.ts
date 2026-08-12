@@ -1,0 +1,66 @@
+import { createHash } from 'node:crypto';
+import type { EmbeddingProvider } from './embedding-provider';
+
+export const EMBEDDING_DIMENSION = 1536;
+
+/**
+ * Deterministic hash of "what was embedded", used for idempotency and to detect
+ * content that changed version/provider/model and therefore needs re-indexing.
+ * Order must stay stable across processes (content, provider, model, dimension,
+ * version) so the same logical input always produces the same hash.
+ */
+export function computeEmbeddingHash(
+  content: string,
+  provider: string,
+  model: string,
+  dimension: number,
+  version: string,
+): string {
+  const canonical = [content, provider, model, String(dimension), version].join('\0');
+  return createHash('sha256').update(canonical, 'utf8').digest('hex');
+}
+
+export function embeddingsPerTerm(inputs: string[]): number {
+  return inputs.reduce((sum, input) => sum + Math.ceil(input.length / 4), 0);
+}
+
+export interface BatchedEmbeddingResult {
+  vectors: number[][];
+  inputTokens: number | null;
+  latencyMs: number;
+  batchCount: number;
+}
+
+/**
+ * Splits texts into bounded batches and aggregates usage so a single document
+ * job can produce one `AIUsage` row (operation `embedding`). Empty `inputs`
+ * short-circuits without touching the provider.
+ */
+export async function embedInBatches(
+  provider: EmbeddingProvider,
+  inputs: string[],
+  batchSize: number,
+): Promise<BatchedEmbeddingResult> {
+  if (inputs.length === 0) {
+    return { vectors: [], inputTokens: null, latencyMs: 0, batchCount: 0 };
+  }
+  const vectors: number[][] = [];
+  let inputTokens = 0;
+  let latencyMs = 0;
+  let batchCount = 0;
+  let anyNullTokens = false;
+  for (let offset = 0; offset < inputs.length; offset += batchSize) {
+    const result = await provider.embed({ inputs: inputs.slice(offset, offset + batchSize) });
+    vectors.push(...result.embeddings);
+    if (result.usage.inputTokens === null) anyNullTokens = true;
+    else inputTokens += result.usage.inputTokens;
+    latencyMs += result.usage.latencyMs;
+    batchCount += 1;
+  }
+  return {
+    vectors,
+    inputTokens: anyNullTokens ? null : inputTokens,
+    latencyMs,
+    batchCount,
+  };
+}

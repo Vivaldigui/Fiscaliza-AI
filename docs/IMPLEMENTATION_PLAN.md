@@ -79,17 +79,26 @@ Entregas pequenas, migráveis e testáveis. Nenhuma fase depende de mocks silenc
 
 **Critério:** nenhum JSON/evidência inválido persiste; fixture crítica mantém três estados; alteração humana preserva original. Todos atendidos e testados (ver `PHASE_4_REPORT.md`).
 
-## Fase 5 — RAG, WhatsApp e notificações
+## Fase 5A — RAG web autorizado (implementada)
 
-- embeddings configuráveis e índice pgvector;
-- consultas estruturadas antes do RAG, com filtros de autorização;
-- conversa web e sessão Redis;
+**Status:** implementada e validada em 2026-08-11 com PostgreSQL/pgvector real e fixtures sintéticas. Detalhes em `PHASE_5A_REPORT.md` e decisão de arquitetura em `adr/ADR-002-EMBEDDINGS.md`.
+
+- `EmbeddingProvider` (`createEmbeddingProvider`) separado do provider de chat, com `EMBEDDINGS_*` próprias e `fake` rejeitado em produção;
+- indexação incremental e idempotente (provider/modelo/versão/hash por chunk), restrita à tentativa corrente, com backfill controlado e índice HNSW de pgvector;
+- consultas estruturadas resolvidas no PostgreSQL antes do RAG; filtro de autorização aplicado no SQL antes do `ORDER BY`/`LIMIT` — nunca "busca global e filtra em memória";
+- conversa web e sessão Redis; respostas com fontes validadas e URL assinada da página exata; `ConversationMessage` persistindo provider/modelo/tokens/latência/versões; `AIUsage` por operação;
+- fila `conversation-answers` consumindo `ConversationAnswerRequested`; `DocumentProcessed` alimenta a fila `embeddings` somente com `EMBEDDINGS_ENABLED=true`.
+
+**Critério atendido:** o vereador consulta apenas os documentos autorizados da proposição (anexos + respostas); um chunk mais similar de documento não autorizado nunca entra no resultado; pergunta sem fonte suficiente recebe resposta explícita de insuficiência.
+
+## Fase 5B — WhatsApp e notificações (pendente)
+
 - inbound UAZAPI via n8n com idempotência e identidade E.164;
 - `ResponseAnalysisCompleted` → `Notification` → workflow n8n;
 - retries/status de entrega e alertas de prazo;
 - workflows e payloads de exemplo importáveis.
 
-**Critério:** vereador consulta apenas seus documentos; mensagem duplicada não duplica resposta; notificação só sai após análise.
+**Critério:** mensagem duplicada não duplica resposta; notificação só sai após análise.
 
 ## Fase 6 — Endurecimento e operação piloto
 

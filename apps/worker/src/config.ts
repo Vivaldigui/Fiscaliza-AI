@@ -61,6 +61,24 @@ const schema = z
     AI_MAX_INPUT_CHARS: z.coerce.number().int().min(1_000).default(60_000),
     AI_QUEUE_ATTEMPTS: z.coerce.number().int().min(1).max(10).default(3),
     AI_QUEUE_BACKOFF_MS: z.coerce.number().int().min(100).default(10_000),
+    EMBEDDINGS_ENABLED: booleanValue,
+    EMBEDDINGS_PROVIDER: z.enum(['openai', 'fake']).default('fake'),
+    EMBEDDINGS_MODEL: z.string().default('text-embedding-3-small'),
+    EMBEDDINGS_DIMENSION: z.coerce.number().int().min(1).max(4096).default(1536),
+    EMBEDDINGS_API_KEY: z.string().optional(),
+    EMBEDDINGS_TIMEOUT_MS: z.coerce.number().int().min(1_000).default(30_000),
+    EMBEDDINGS_BATCH_SIZE: z.coerce.number().int().min(1).max(256).default(16),
+    EMBEDDINGS_QUEUE_ATTEMPTS: z.coerce.number().int().min(1).max(10).default(3),
+    EMBEDDINGS_QUEUE_BACKOFF_MS: z.coerce.number().int().min(100).default(10_000),
+    EMBEDDINGS_WORKER_CONCURRENCY: z.coerce.number().int().min(1).max(16).default(1),
+    CHAT_ENABLED: booleanValue,
+    CHAT_WORKER_CONCURRENCY: z.coerce.number().int().min(1).max(16).default(1),
+    CONVERSATION_SESSION_TTL_SECONDS: z.coerce.number().int().min(60).max(604_800).default(3_600),
+    CONVERSATION_RAG_TOP_K: z.coerce.number().int().min(1).max(50).default(8),
+    CONVERSATION_MAX_CONTEXT_CHARS: z.coerce.number().int().min(1_000).default(60_000),
+    CONVERSATION_ANSWER_MAX_RETRIES: z.coerce.number().int().min(0).max(5).default(2),
+    CONVERSATION_QUEUE_ATTEMPTS: z.coerce.number().int().min(1).max(10).default(3),
+    CONVERSATION_QUEUE_BACKOFF_MS: z.coerce.number().int().min(100).default(10_000),
   })
   .superRefine((value, context) => {
     if (
@@ -97,6 +115,42 @@ const schema = z
         code: z.ZodIssueCode.custom,
         path: ['LLM_PROVIDER'],
         message: 'provider "fake" não pode ficar ativo em produção',
+      });
+    }
+    if (
+      value.EMBEDDINGS_ENABLED &&
+      value.EMBEDDINGS_PROVIDER !== 'fake' &&
+      !value.EMBEDDINGS_API_KEY
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['EMBEDDINGS_API_KEY'],
+        message: 'obrigatória quando EMBEDDINGS_ENABLED=true e EMBEDDINGS_PROVIDER não é fake',
+      });
+    }
+    if (
+      value.NODE_ENV === 'production' &&
+      value.EMBEDDINGS_ENABLED &&
+      value.EMBEDDINGS_PROVIDER === 'fake'
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['EMBEDDINGS_PROVIDER'],
+        message: 'provider "fake" não pode ficar ativo em produção',
+      });
+    }
+    if (value.CHAT_ENABLED && !value.AI_PROCESSING_ENABLED) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['CHAT_ENABLED'],
+        message: 'exige AI_PROCESSING_ENABLED=true (as respostas usam o modelo de chat)',
+      });
+    }
+    if (value.CHAT_ENABLED && !value.EMBEDDINGS_ENABLED) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['CHAT_ENABLED'],
+        message: 'exige EMBEDDINGS_ENABLED=true (o retrieval autorizado usa os embeddings)',
       });
     }
   });
